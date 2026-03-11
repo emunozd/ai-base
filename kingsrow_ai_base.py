@@ -349,6 +349,7 @@ class KingsrowAI:
 
             prompt_completo = "\n".join(partes)
             max_tok         = req.max_tokens or 1024
+            if max_tok < 1024: max_tok = 4096
             msg_id          = f"msg_{uuid.uuid4().hex}"
             created         = int(time.time())
             model_name      = req.model or MODEL_PATH
