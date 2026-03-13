@@ -203,56 +203,49 @@ def _web_search(query: str, max_results: int = 5) -> Optional[str]:
         return None
 
 
-def _clasificar_busqueda(pregunta: str) -> Optional[str]:
+def _clasificar_busqueda(pregunta: str) -> list[str]:
     """
-    Inferencia ligera (64 tokens) sobre la última pregunta del usuario.
-    El modelo responde SOLO con JSON: {"buscar": true, "query": "..."} o {"buscar": false}.
-    Devuelve la query si se necesita búsqueda, None si no.
-
-    Por qué funciona: el modelo es muy confiable siguiendo instrucciones de
-    JSON simple en un solo turno — mucho más que emitir tool_calls espontáneos.
+    Inferencia ligera sobre la última pregunta del usuario.
+    Devuelve lista de queries a buscar (una por tema), o [] si no hace falta.
+    Nunca incluye queries para fecha/hora — eso lo provee el servidor.
+    Queries siempre en inglés.
     """
     model, processor, _ = _ModeloMLX.get()
 
     system_prompt = (
-        'Eres un clasificador. Responde ÚNICAMENTE con JSON válido, sin texto adicional, '
-        'sin explicaciones, sin markdown. '
-        'Formato exacto: {"buscar": true, "query": "..."} o {"buscar": false}. '
-        'Responde buscar=true solo si la pregunta requiere información actualizada '
-        'que no está en tu entrenamiento: precios en tiempo real, noticias recientes, '
-        'eventos actuales, datos posteriores a 2024. '
-        'Responde buscar=false para conocimiento general, matemáticas, código, historia, '
-        'conceptos, o cualquier cosa que no dependa de datos recientes. '
-        'IMPORTANTE: el campo "query" debe estar siempre en inglés para obtener mejores resultados de búsqueda.'
+        'Eres un clasificador de búsquedas web. Responde ÚNICAMENTE con JSON válido, '
+        'sin texto adicional, sin explicaciones, sin markdown. '
+        'Formato: {"queries": ["query1", "query2"]} o {"queries": []}. '
+        'Incluye una query por cada tema independiente que requiera información actualizada: '
+        'precios en tiempo real, noticias recientes, clima actual, eventos actuales. '
+        'NUNCA incluyas query para fecha u hora — ese dato lo provee el sistema. '
+        'queries=[] para conocimiento general, matemáticas, código, historia, conceptos. '
+        'Todas las queries en inglés.'
     )
 
     prompt = processor.apply_chat_template(
         [
-            {"role": "system",  "content": system_prompt},
-            {"role": "user",    "content": pregunta},
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": pregunta},
         ],
         tokenize=False,
         add_generation_prompt=True,
         enable_thinking=False,
     )
 
-    result    = vlm_generate(model, processor, prompt, max_tokens=_MAX_TOKENS_CLASIFICADOR, verbose=False)
+    result    = vlm_generate(model, processor, prompt, max_tokens=128, verbose=False)
     respuesta = result.text.strip() if hasattr(result, "text") else str(result).strip()
-
-    # Limpiar posibles artefactos de markdown
     respuesta = re.sub(r"```json|```", "", respuesta).strip()
 
     try:
-        datos = json.loads(respuesta)
-        if datos.get("buscar") is True:
-            query = datos.get("query", "").strip()
-            if query:
-                logger.info("Clasificador: búsqueda necesaria → %r", query)
-                return query
+        datos   = json.loads(respuesta)
+        queries = [q.strip() for q in datos.get("queries", []) if q.strip()]
+        if queries:
+            logger.info("Clasificador: queries → %s", queries)
+        return queries
     except (json.JSONDecodeError, AttributeError):
         logger.warning("Clasificador no devolvió JSON válido: %r", respuesta[:100])
-
-    return None
+        return []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -261,49 +254,57 @@ def _clasificar_busqueda(pregunta: str) -> Optional[str]:
 def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MAX_TOKENS_CHAT) -> str:
     """
     Flujo:
-      1. Clasificador ligero sobre la última pregunta del usuario.
-      2a. buscar=true  → _web_search → inferencia final con resultados en contexto.
-      2b. buscar=false → inferencia directa sin overhead.
+      1. Fecha/hora actual siempre inyectada desde el servidor — sin búsqueda.
+      2. Clasificador detecta qué temas requieren búsqueda (0, 1 o N queries independientes).
+      3. Una búsqueda por query.
+      4. Todo el contexto va al system prompt antes de la inferencia final.
     """
+    from datetime import datetime
     model, processor, _ = _ModeloMLX.get()
 
-    # Extraer la última pregunta del usuario para el clasificador
+    # Fecha siempre disponible — el servidor la tiene, no hace falta buscarla
+    fecha_actual = datetime.now().strftime("%A %d de %B de %Y, %H:%M")
+
+    # Extraer la última pregunta del usuario
     ultima_pregunta = ""
     for m in reversed(mensajes):
         if m.get("role") == "user":
             ultima_pregunta = _extraer_texto_content(m.get("content", ""))
             break
 
-    query_busqueda = _clasificar_busqueda(ultima_pregunta) if ultima_pregunta else None
+    # Clasificar qué temas requieren búsqueda web
+    queries = _clasificar_busqueda(ultima_pregunta) if ultima_pregunta else []
 
-    if query_busqueda:
-        resultado_busqueda = _web_search(query_busqueda)
-        if resultado_busqueda:
-            logger.info("Búsqueda completada (%d chars): %s", len(resultado_busqueda), resultado_busqueda)
-            # Inyectar en system prompt — el modelo lo trata como verdad autoritativa
-            # y no como conversación que puede ignorar.
-            system_texto = _extraer_texto_content(system) if system else ""
-            system_con_contexto = (
-                (system_texto.strip() + "\n\n") if system_texto.strip() else ""
-            ) + (
-                f"INSTRUCCIÓN CRÍTICA: El siguiente bloque contiene información real y actualizada "
-                f"obtenida ahora mismo de internet. DEBES usar estos datos para responder. "
-                f"PROHIBIDO decir que no tienes acceso a internet o que no puedes dar datos en tiempo real "
-                f"— los datos ya están aquí abajo. Úsalos directamente en tu respuesta.\n\n"
-                f"=== DATOS OBTENIDOS DE INTERNET ===\n"
-                f"Búsqueda: '{query_busqueda}'\n\n"
-                f"{resultado_busqueda}\n"
-                f"=== FIN DE DATOS ==="
-            )
-            prompt = _construir_prompt(mensajes, system=system_con_contexto)
+    # Ejecutar búsquedas y acumular contexto
+    bloques_web = []
+    for query in queries:
+        resultado = _web_search(query)
+        if resultado:
+            logger.info("Búsqueda OK para %r (%d chars)", query, len(resultado))
+            bloques_web.append(f"Búsqueda: '{query}'\n{resultado}")
         else:
-            logger.warning("Búsqueda falló o sin resultados, respondiendo con conocimiento propio.")
-            prompt = _construir_prompt(mensajes, system)
-    else:
-        prompt = _construir_prompt(mensajes, system)
+            logger.warning("Sin resultados para %r", query)
 
+    # Armar system prompt: system original + fecha + datos web
+    system_texto = _extraer_texto_content(system) if system else ""
+    partes = []
+    if system_texto.strip():
+        partes.append(system_texto.strip())
+    partes.append(f"Fecha y hora actual: {fecha_actual}.")
+    if bloques_web:
+        partes.append(
+            "INSTRUCCIÓN CRÍTICA: Los siguientes datos fueron obtenidos ahora mismo de internet. "
+            "DEBES usarlos para responder. PROHIBIDO decir que no tienes acceso a internet.\n\n"
+            "=== DATOS DE INTERNET ===\n" +
+            "\n\n---\n\n".join(bloques_web) +
+            "\n=== FIN DE DATOS ==="
+        )
+
+    prompt = _construir_prompt(mensajes, system="\n\n".join(partes))
     result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False)
     return result.text.strip() if hasattr(result, "text") else str(result).strip()
+
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
