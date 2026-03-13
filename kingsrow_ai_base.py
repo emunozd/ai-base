@@ -18,14 +18,18 @@ Arranque:
     python ~/projects/AIBase/main.py
 
 Variables de entorno (todas opcionales):
-    KR_MODEL_PATH            default: mlx-community/Qwen3.5-35B-A3B-4bit
-    KR_HOST                  default: 192.168.0.90
-    KR_PORT                  default: 8181
-    KR_IMG_MAX               default: 1024
-    KR_API_KEY               default: vacío = sin auth
-    KR_MAX_TOKENS_CHAT       default: 8192
-    KR_MAX_TOKENS_OPENAI     default: 4096
-    KR_MAX_TOKENS_LUKA       default: 600
+    KR_MODEL_PATH              default: mlx-community/Qwen3.5-35B-A3B-4bit
+    KR_HOST                    default: 0.0.0.0
+    KR_PORT                    default: 8181
+    KR_IMG_MAX                 default: 1024
+    KR_API_KEY                 default: vacío = sin auth
+    KR_MAX_TOKENS_CHAT         default: 8192
+    KR_MAX_TOKENS_OPENAI       default: 4096
+    KR_MAX_TOKENS_LUKA         default: 600
+    KR_MAX_CTX_TOKENS          default: 20000
+    KR_CTX_COLA_MSGS           default: 6
+    KR_WEB_SEARCH_MAX_RESULTS  default: 5
+    KR_WEB_FETCH_MAX_CHARS     default: 3000
 """
 
 import base64
@@ -61,20 +65,43 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # ─────────────────────────────────────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
-MODEL_PATH        = os.getenv("KR_MODEL_PATH",           "mlx-community/Qwen3.5-35B-A3B-4bit")
-HOST              = os.getenv("KR_HOST",                  "192.168.0.90")
-PORT              = int(os.getenv("KR_PORT",              "8181"))
-IMG_MAX_PX        = int(os.getenv("KR_IMG_MAX",           "1024"))
-API_KEY           = os.getenv("KR_API_KEY",               "")
-MAX_TOKENS_CHAT   = int(os.getenv("KR_MAX_TOKENS_CHAT",   "8192"))
-MAX_TOKENS_OPENAI = int(os.getenv("KR_MAX_TOKENS_OPENAI", "4096"))
-MAX_TOKENS_LUKA   = int(os.getenv("KR_MAX_TOKENS_LUKA",   "600"))
+from pydantic_settings import BaseSettings
+
+class _Settings(BaseSettings):
+    kr_model_path:             str = "mlx-community/Qwen3.5-35B-A3B-4bit"
+    kr_host:                   str = "0.0.0.0"
+    kr_port:                   int = 8181
+    kr_img_max:                int = 1024
+    kr_api_key:                str = ""
+    kr_max_tokens_chat:        int = 8192
+    kr_max_tokens_openai:      int = 4096
+    kr_max_tokens_luka:        int = 600
+    kr_max_ctx_tokens:         int = 20000
+    kr_ctx_cola_msgs:          int = 6
+    kr_web_search_max_results: int = 5
+    kr_web_fetch_max_chars:    int = 3000
+
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
+
+_cfg = _Settings()
+
+MODEL_PATH             = _cfg.kr_model_path
+HOST                   = _cfg.kr_host
+PORT                   = _cfg.kr_port
+IMG_MAX_PX             = _cfg.kr_img_max
+API_KEY                = _cfg.kr_api_key
+MAX_TOKENS_CHAT        = _cfg.kr_max_tokens_chat
+MAX_TOKENS_OPENAI      = _cfg.kr_max_tokens_openai
+MAX_TOKENS_LUKA        = _cfg.kr_max_tokens_luka
+MAX_CTX_TOKENS         = _cfg.kr_max_ctx_tokens
+CTX_COLA_MSGS          = _cfg.kr_ctx_cola_msgs
+WEB_SEARCH_MAX_RESULTS = _cfg.kr_web_search_max_results
+WEB_FETCH_MAX_CHARS    = _cfg.kr_web_fetch_max_chars
 
 # El clasificador solo necesita devolver JSON corto
 _MAX_TOKENS_CLASIFICADOR = 64
-# Máximo de tokens de contexto de entrada antes de truncar historial
-# Qwen3.5-35B-A3B-4bit empieza a degradarse por encima de ~20k tokens de entrada
-MAX_CTX_TOKENS = int(os.getenv("KR_MAX_CTX_TOKENS", "20000"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -294,7 +321,7 @@ def _url_es_antigua(url: str) -> bool:
     return False
 
 
-def _fetch_url(url: str, max_chars: int = 3000) -> Optional[str]:
+def _fetch_url(url: str, max_chars: int = WEB_FETCH_MAX_CHARS) -> Optional[str]:
     """
     Descarga el contenido real de una URL y lo limpia.
     Rechaza: respuestas 4xx/5xx, URLs con años anteriores a 2025.
@@ -321,7 +348,7 @@ def _fetch_url(url: str, max_chars: int = 3000) -> Optional[str]:
         return None
 
 
-def _web_search(query: str, max_results: int = 5) -> Optional[str]:
+def _web_search(query: str, max_results: int = WEB_SEARCH_MAX_RESULTS) -> Optional[str]:
     """
     1. Busca con ddgs para obtener URLs relevantes.
     2. Hace fetch del contenido real de la primera URL que responda.
@@ -426,10 +453,10 @@ def _truncar_mensajes(mensajes: list[dict], max_tokens: int = MAX_CTX_TOKENS) ->
     if total <= max_tokens:
         return mensajes
 
-    # Siempre mantener el primero y los últimos 6 mensajes
+    # Siempre mantener el primero y los últimos CTX_COLA_MSGS mensajes
     cabeza = mensajes[:1]
-    cola   = mensajes[-6:] if len(mensajes) > 7 else mensajes[1:]
-    medio  = mensajes[1:-6] if len(mensajes) > 7 else []
+    cola   = mensajes[-CTX_COLA_MSGS:] if len(mensajes) > CTX_COLA_MSGS + 1 else mensajes[1:]
+    medio  = mensajes[1:-CTX_COLA_MSGS] if len(mensajes) > CTX_COLA_MSGS + 1 else []
 
     # Eliminar del medio hasta que quepa
     while medio:

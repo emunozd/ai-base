@@ -170,13 +170,13 @@ class LukaRouter(BaseRouter):
     Todos los endpoints quedan bajo el prefijo /luka/.
 
     La luka-api (Docker) debe apuntar a:
-        http://192.168.0.90:8181/luka/categorizar-factura-texto
-        http://192.168.0.90:8181/luka/categorizar-factura-imagen
-        http://192.168.0.90:8181/luka/categorizar-gasto-manual
+        KR_HOST:KR_PORT/luka/categorizar-factura-texto
+        KR_HOST:KR_PORT/luka/categorizar-factura-imagen
+        KR_HOST:KR_PORT/luka/categorizar-gasto-manual
 
     Nota Docker Desktop: Docker Desktop en Mac enruta tráfico saliente
     de contenedores a través de la red del host. Los contenedores pueden
-    alcanzar 192.168.0.90:8181 directamente. NO usar host.docker.internal
+    alcanzar KR_HOST:KR_PORT directamente. NO usar host.docker.internal
     aquí porque ese alias apunta a 127.0.0.1 del host, y el servidor ya
     no escucha en 127.0.0.1.
     """
