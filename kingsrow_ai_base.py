@@ -53,6 +53,10 @@ from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+# Silenciar librerías de búsqueda web — su verbosidad no aporta al log de producción
+logging.getLogger("ddgs").setLevel(logging.WARNING)
+logging.getLogger("primp").setLevel(logging.CRITICAL)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Config
