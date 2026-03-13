@@ -216,10 +216,11 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
         'Eres un clasificador de búsquedas web. Responde ÚNICAMENTE con JSON válido, '
         'sin texto adicional, sin explicaciones, sin markdown. '
         'Formato: {"queries": ["query1", "query2"]} o {"queries": []}. '
-        'Incluye una query por cada tema independiente que requiera información actualizada: '
-        'precios en tiempo real, noticias recientes, clima actual, eventos actuales. '
-        'NUNCA incluyas query para fecha u hora — ese dato lo provee el sistema. '
-        'queries=[] para conocimiento general, matemáticas, código, historia, conceptos. '
+        'SOLO incluye una query si el dato cambia frecuentemente y no está en el entrenamiento: '
+        'precio actual de activos, clima ahora mismo, noticias de hoy, resultados deportivos de hoy, '
+        'tasas o estadísticas publicadas recientemente (último mes). '
+        'NUNCA busques: definiciones, conceptos, historia, matemáticas, código, '
+        'explicaciones de fenómenos, fecha/hora, ni nada que un libro o enciclopedia pueda responder. '
         'Todas las queries en inglés.'
     )
 
