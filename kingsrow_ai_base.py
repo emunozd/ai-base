@@ -459,21 +459,27 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
     # Truncar historial si el contexto es demasiado largo
     mensajes = _truncar_mensajes(mensajes)
 
-    # Extraer la última pregunta del usuario — solo si es texto plano, no tool_result
+    # Solo clasificar si el último mensaje es una pregunta humana real.
+    # Saltar si: el último mensaje no es user, o es tool_result, o hay tool_use en el historial reciente.
     ultima_pregunta = ""
-    for m in reversed(mensajes):
-        if m.get("role") == "user":
-            content_raw = m.get("content", "")
-            # Si el último mensaje de usuario contiene tool_result, es output de herramienta
-            # no una pregunta humana — no clasificar para búsqueda
-            es_tool_result = (
-                isinstance(content_raw, list) and
-                any((b.get("type") if isinstance(b, dict) else getattr(b, "type", None)) == "tool_result"
-                    for b in content_raw)
-            )
-            if not es_tool_result:
-                ultima_pregunta = _extraer_texto_content(content_raw)
-            break
+    ultimo_rol = mensajes[-1].get("role") if mensajes else None
+    if ultimo_rol == "user":
+        content_raw = mensajes[-1].get("content", "")
+        es_tool_result = (
+            isinstance(content_raw, list) and
+            any((b.get("type") if isinstance(b, dict) else getattr(b, "type", None)) == "tool_result"
+                for b in content_raw)
+        )
+        # También saltar si hay tool_use en los últimos mensajes del assistant (loop activo)
+        en_loop_tools = any(
+            m.get("role") == "assistant" and
+            isinstance(m.get("content", ""), list) and
+            any((b.get("type") if isinstance(b, dict) else getattr(b, "type", None)) == "tool_use"
+                for b in m.get("content", []))
+            for m in mensajes[-4:]
+        )
+        if not es_tool_result and not en_loop_tools:
+            ultima_pregunta = _extraer_texto_content(content_raw)
 
     # Clasificar qué temas requieren búsqueda web
     queries = _clasificar_busqueda(ultima_pregunta) if ultima_pregunta else []
@@ -734,9 +740,9 @@ class KingsrowAI:
 
             # Detectar si el modelo emitió tool_use en texto plano y parsearlo
             # Claude Code espera stop_reason="tool_use" + content block tipo tool_use
-            logger.info("RAW_RESPONSE (primeros 500 chars): %r", respuesta[:500])
+            #logger.info("RAW_RESPONSE (primeros 500 chars): %r", respuesta[:500])
             tool_blocks, texto_limpio = _parsear_tool_calls(respuesta)
-            logger.info("TOOL_BLOCKS encontrados: %d → %s", len(tool_blocks), [b.get("name") for b in tool_blocks])
+            #logger.info("TOOL_BLOCKS encontrados: %d → %s", len(tool_blocks), [b.get("name") for b in tool_blocks])
             tiene_tools = len(tool_blocks) > 0
             stop_reason = "tool_use" if tiene_tools else "end_turn"
 
