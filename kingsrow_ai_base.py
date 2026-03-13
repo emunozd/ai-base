@@ -24,6 +24,7 @@ Variables de entorno (todas opcionales):
     KR_IMG_MAX               default: 1024
     KR_API_KEY               default: vacío = sin auth
     KR_MAX_TOKENS_CHAT       default: 8192
+    KR_MAX_TOKENS_CHAT       default: 8192
     KR_MAX_TOKENS_OPENAI     default: 4096
     KR_MAX_TOKENS_LUKA       default: 600
 """
@@ -145,11 +146,33 @@ def _construir_prompt(mensajes: list[dict], system: Any = None) -> str:
 # Búsqueda web — DuckDuckGo, sin API key
 # pip install duckduckgo-search --break-system-packages
 # ─────────────────────────────────────────────────────────────────────────────
+def _fetch_url(url: str, max_chars: int = 3000) -> Optional[str]:
+    """
+    Descarga el contenido real de una URL y lo limpia.
+    Devuelve texto plano truncado o None si falla.
+    Requiere: pip install httpx beautifulsoup4 --break-system-packages
+    """
+    try:
+        import httpx
+        from bs4 import BeautifulSoup
+        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+        r = httpx.get(url, headers=headers, timeout=8, follow_redirects=True)
+        soup = BeautifulSoup(r.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            tag.decompose()
+        texto = " ".join(soup.get_text(separator=" ").split())
+        return texto[:max_chars] if texto.strip() else None
+    except Exception as e:
+        logger.warning("fetch_url falló (%s): %s", url, e)
+        return None
+
+
 def _web_search(query: str, max_results: int = 5) -> Optional[str]:
     """
-    Devuelve los resultados como string, o None si no hay internet o falla la búsqueda.
-    Nunca lanza excepción — el caller decide qué hacer con None.
-    Requiere: pip install ddgs --break-system-packages
+    1. Busca con ddgs para obtener URLs relevantes.
+    2. Hace fetch del contenido real de la primera URL que responda.
+    Si el fetch falla para todas, usa los snippets como fallback.
+    Requiere: pip install ddgs httpx beautifulsoup4 --break-system-packages
     """
     try:
         from ddgs import DDGS
@@ -157,12 +180,25 @@ def _web_search(query: str, max_results: int = 5) -> Optional[str]:
         logger.warning("ddgs no instalado. Ejecuta: pip install ddgs --break-system-packages")
         return None
     try:
-        resultados = []
+        urls = []
         with DDGS() as client:
-            # region="wt-wt" = worldwide, sin filtro geográfico — mejores resultados en inglés
             for r in client.text(query, max_results=max_results, region="wt-wt"):
-                resultados.append(f"- {r['title']}: {r['body']} ({r['href']})")
-        return "\n".join(resultados) if resultados else None
+                urls.append((r["title"], r["href"], r["body"]))
+
+        if not urls:
+            return None
+
+        # Fetch del contenido real — primera URL que responda
+        for titulo, url, snippet in urls[:3]:
+            contenido = _fetch_url(url)
+            if contenido:
+                logger.info("Fetch exitoso: %s", url)
+                return f"Fuente: {titulo} ({url})\n\n{contenido}"
+
+        # Fallback a snippets si el fetch falla para todas
+        logger.warning("Fetch falló para todas las URLs, usando snippets.")
+        return "\n".join(f"- {t}: {s} ({u})" for t, u, s in urls)
+
     except Exception as e:
         logger.warning("Búsqueda web falló (sin internet?): %s", e)
         return None
@@ -244,8 +280,8 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
     if query_busqueda:
         resultado_busqueda = _web_search(query_busqueda)
         if resultado_busqueda:
-            logger.info("Búsqueda completada (%d chars)", len(resultado_busqueda))
-            logger.info("SNIPPETS: %s", resultado_busqueda)
+            logger.info("Búsqueda completada (%d chars):
+%s", len(resultado_busqueda), resultado_busqueda)
             # Inyectar en system prompt — el modelo lo trata como verdad autoritativa
             # y no como conversación que puede ignorar.
             system_texto = _extraer_texto_content(system) if system else ""
