@@ -24,7 +24,6 @@ Variables de entorno (todas opcionales):
     KR_IMG_MAX               default: 1024
     KR_API_KEY               default: vacío = sin auth
     KR_MAX_TOKENS_CHAT       default: 8192
-    KR_MAX_TOKENS_CHAT       default: 8192
     KR_MAX_TOKENS_OPENAI     default: 4096
     KR_MAX_TOKENS_LUKA       default: 600
 """
@@ -287,10 +286,14 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
             system_con_contexto = (
                 (system_texto.strip() + "\n\n") if system_texto.strip() else ""
             ) + (
-                f"CONTEXTO ACTUALIZADO DE INTERNET (usa esta información para responder, "
-                f"es más confiable que tu conocimiento de entrenamiento):\n"
-                f"Búsqueda realizada: '{query_busqueda}'\n\n"
-                f"{resultado_busqueda}"
+                f"INSTRUCCIÓN CRÍTICA: El siguiente bloque contiene información real y actualizada "
+                f"obtenida ahora mismo de internet. DEBES usar estos datos para responder. "
+                f"PROHIBIDO decir que no tienes acceso a internet o que no puedes dar datos en tiempo real "
+                f"— los datos ya están aquí abajo. Úsalos directamente en tu respuesta.\n\n"
+                f"=== DATOS OBTENIDOS DE INTERNET ===\n"
+                f"Búsqueda: '{query_busqueda}'\n\n"
+                f"{resultado_busqueda}\n"
+                f"=== FIN DE DATOS ==="
             )
             prompt = _construir_prompt(mensajes, system=system_con_contexto)
         else:
