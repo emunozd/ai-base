@@ -145,17 +145,31 @@ def _construir_prompt(mensajes: list[dict], system: Any = None) -> str:
 # Búsqueda web — DuckDuckGo, sin API key
 # pip install duckduckgo-search --break-system-packages
 # ─────────────────────────────────────────────────────────────────────────────
+def _url_es_antigua(url: str) -> bool:
+    """Detecta URLs con años anteriores a 2025 en el path."""
+    match = re.search(r'/(20\d{2})/', url)
+    if match:
+        return int(match.group(1)) < 2025
+    return False
+
+
 def _fetch_url(url: str, max_chars: int = 3000) -> Optional[str]:
     """
     Descarga el contenido real de una URL y lo limpia.
+    Rechaza: respuestas 4xx/5xx, URLs con años anteriores a 2025.
     Devuelve texto plano truncado o None si falla.
-    Requiere: pip install httpx beautifulsoup4 --break-system-packages
     """
+    if _url_es_antigua(url):
+        logger.warning("fetch_url omitida (URL antigua): %s", url)
+        return None
     try:
         import httpx
         from bs4 import BeautifulSoup
         headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
         r = httpx.get(url, headers=headers, timeout=8, follow_redirects=True)
+        if r.status_code >= 400:
+            logger.warning("fetch_url rechazada HTTP %d: %s", r.status_code, url)
+            return None
         soup = BeautifulSoup(r.text, "html.parser")
         for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
             tag.decompose()
@@ -216,12 +230,13 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
         'Eres un clasificador de búsquedas web. Responde ÚNICAMENTE con JSON válido, '
         'sin texto adicional, sin explicaciones, sin markdown. '
         'Formato: {"queries": ["query1", "query2"]} o {"queries": []}. '
-        'SOLO incluye una query si el dato cambia frecuentemente y no está en el entrenamiento: '
-        'precio actual de activos, clima ahora mismo, noticias de hoy, resultados deportivos de hoy, '
-        'tasas o estadísticas publicadas recientemente (último mes). '
-        'NUNCA busques: definiciones, conceptos, historia, matemáticas, código, '
-        'explicaciones de fenómenos, fecha/hora, ni nada que un libro o enciclopedia pueda responder. '
-        'Todas las queries en inglés.'
+        'SOLO genera queries para datos que cambian frecuentemente y no están en tu entrenamiento: '
+        'precios de activos, clima actual, noticias recientes, resultados deportivos, '
+        'tasas, estadísticas o cifras oficiales recientes. '
+        'NUNCA busques: definiciones, conceptos, explicaciones, historia, matemáticas, código. '
+        'Todas las queries en inglés. '
+        'El año actual es 2026. Inclúyelo siempre en queries de datos anuales '
+        '(tasas, salarios, estadísticas, precios históricos).'
     )
 
     prompt = processor.apply_chat_template(
