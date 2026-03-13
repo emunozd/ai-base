@@ -222,6 +222,8 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = 81
     prompt = _construir_prompt_chat(mensajes, system)
     result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False)
     respuesta = result.text.strip() if hasattr(result, "text") else str(result).strip()
+    logger.info("Respuesta cruda del modelo: %r", respuesta[:500])
+
 
     # Detectar si el modelo quiere hacer una búsqueda web
     # Qwen puede indicarlo con un bloque JSON de tool_call o con texto explícito
