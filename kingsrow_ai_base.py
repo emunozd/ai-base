@@ -127,10 +127,45 @@ def _extraer_texto_content(content):
         return "\n".join(partes)
     return str(content)
 
+def _normalizar_content(content) -> str:
+    """
+    Convierte content de un mensaje al string que Qwen debe ver.
+    - Mensajes user con tool_result: muestra los resultados de herramientas.
+    - Mensajes assistant con tool_use: muestra las llamadas a herramientas.
+    - Texto plano: pasa directo.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content)
+
+    partes = []
+    for b in content:
+        t = b.get("type") if isinstance(b, dict) else getattr(b, "type", None)
+        if t == "text":
+            val = b.get("text", "") if isinstance(b, dict) else getattr(b, "text", "")
+            if val:
+                partes.append(val)
+        elif t == "tool_use":
+            # El asistente pidió ejecutar una herramienta
+            name = b.get("name", "") if isinstance(b, dict) else getattr(b, "name", "")
+            inp  = b.get("input", {}) if isinstance(b, dict) else getattr(b, "input", {})
+            partes.append("<tool_call>" + json.dumps({"name": name, "input": inp}, ensure_ascii=False) + "</tool_call>")
+        elif t == "tool_result":
+            # El usuario devuelve el resultado de la herramienta
+            cont = b.get("content", "") if isinstance(b, dict) else getattr(b, "content", "")
+            if isinstance(cont, list):
+                cont = "\n".join(c.get("text", "") if isinstance(c, dict) else str(c) for c in cont)
+            tid = b.get("tool_use_id", "") if isinstance(b, dict) else getattr(b, "tool_use_id", "")
+            partes.append("<tool_response id=\"" + tid + "\">" + str(cont) + "</tool_response>")
+    return "\n".join(partes)
+
+
 def _construir_prompt(mensajes: list[dict], system: Any = None) -> str:
     """
-    Construye el prompt multi-turno usando processor.apply_chat_template()
-    directamente — no mlx_vlm.prompt_utils que descarta kwargs adicionales.
+    Construye el prompt multi-turno usando processor.apply_chat_template().
+    Preserva la estructura tool_use/tool_result para que Qwen entienda
+    el loop de herramientas y pueda continuar correctamente.
     """
     _, processor, _ = _ModeloMLX.get()
 
@@ -142,7 +177,7 @@ def _construir_prompt(mensajes: list[dict], system: Any = None) -> str:
 
     for m in mensajes:
         role    = m.get("role", "user")
-        content = _extraer_texto_content(m.get("content", ""))
+        content = _normalizar_content(m.get("content", ""))
         if role in ("user", "assistant", "system") and content.strip():
             msgs.append({"role": role, "content": content})
 
