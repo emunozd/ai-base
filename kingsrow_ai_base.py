@@ -1,32 +1,31 @@
 """
 kingsrow_ai_base.py — Motor de inferencia IA compartido (Kingsrow Home Lab)
 ============================================================================
-Clase base que:
-  - Carga y mantiene el modelo MLX en memoria (singleton).
-  - Expone inferencia de texto e imagen con control fino sobre el chat template.
-  - Registra routers hijos (uno por proyecto) en la app FastAPI.
-  - Expone POST /v1/messages  compatible con Anthropic / Claude Code (SSE).
-  - Expone POST /v1/chat/completions compatible con OpenAI / AnythingLLM (SSE).
-  - Expone GET  /v1/models y GET /health.
-  - Tool calling nativo de Qwen3.5: usa processor.apply_chat_template() directamente
-    (no mlx_vlm.prompt_utils.apply_chat_template que descarta las tools).
-    Qwen3.5 fue entrenado en formato Qwen3-Coder XML:
-      <function=web_search><parameter=query>...</parameter></function>
-    El servidor detecta ese formato, ejecuta DuckDuckGo, y hace segunda inferencia.
+  - Singleton MLX: el modelo se carga una vez, todos los routers lo comparten.
+  - Routers hijos (BaseRouter): un archivo por proyecto, sin tocar este.
+  - POST /v1/messages         — Anthropic-compatible (Claude Code)
+  - POST /v1/chat/completions — OpenAI-compatible (AnythingLLM)
+  - GET  /v1/models, GET /health
+  - Búsqueda web automática via DuckDuckGo:
+      Antes de la inferencia principal, un clasificador ligero decide con JSON
+      {"buscar": true, "query": "..."} si la pregunta requiere datos actualizados.
+      Si buscar=true, el resultado se inyecta en el contexto y se hace la
+      inferencia final con información real.
+      Requiere: pip install duckduckgo-search --break-system-packages
 
 Arranque:
     source ~/mlx-env/bin/activate
     python ~/projects/AIBase/main.py
 
 Variables de entorno (todas opcionales):
-    KR_MODEL_PATH            (default: mlx-community/Qwen3.5-35B-A3B-4bit)
-    KR_HOST                  (default: 192.168.0.90)
-    KR_PORT                  (default: 8181)
-    KR_IMG_MAX               (default: 1024)
-    KR_API_KEY               (default: vacío = sin auth)
-    KR_MAX_TOKENS_CHAT       (default: 8192)
-    KR_MAX_TOKENS_OPENAI     (default: 4096)
-    KR_MAX_TOKENS_LUKA       (default: 600)
+    KR_MODEL_PATH            default: mlx-community/Qwen3.5-35B-A3B-4bit
+    KR_HOST                  default: 192.168.0.90
+    KR_PORT                  default: 8181
+    KR_IMG_MAX               default: 1024
+    KR_API_KEY               default: vacío = sin auth
+    KR_MAX_TOKENS_CHAT       default: 8192
+    KR_MAX_TOKENS_OPENAI     default: 4096
+    KR_MAX_TOKENS_LUKA       default: 600
 """
 
 import base64
@@ -47,6 +46,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from mlx_vlm import generate as vlm_generate
 from mlx_vlm import load as vlm_load
+from mlx_vlm.prompt_utils import apply_chat_template as vlm_apply_chat_template
 from mlx_vlm.utils import load_config
 from PIL import Image
 from pydantic import BaseModel
@@ -57,61 +57,17 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
-MODEL_PATH           = os.getenv("KR_MODEL_PATH",        "mlx-community/Qwen3.5-35B-A3B-4bit")
-HOST                 = os.getenv("KR_HOST",               "192.168.0.90")
-PORT                 = int(os.getenv("KR_PORT",           "8181"))
-IMG_MAX_PX           = int(os.getenv("KR_IMG_MAX",        "1024"))
-API_KEY              = os.getenv("KR_API_KEY",            "")
-MAX_TOKENS_CHAT      = int(os.getenv("KR_MAX_TOKENS_CHAT",   "8192"))
-MAX_TOKENS_OPENAI    = int(os.getenv("KR_MAX_TOKENS_OPENAI", "4096"))
-MAX_TOKENS_LUKA      = int(os.getenv("KR_MAX_TOKENS_LUKA",   "600"))
+MODEL_PATH        = os.getenv("KR_MODEL_PATH",           "mlx-community/Qwen3.5-35B-A3B-4bit")
+HOST              = os.getenv("KR_HOST",                  "192.168.0.90")
+PORT              = int(os.getenv("KR_PORT",              "8181"))
+IMG_MAX_PX        = int(os.getenv("KR_IMG_MAX",           "1024"))
+API_KEY           = os.getenv("KR_API_KEY",               "")
+MAX_TOKENS_CHAT   = int(os.getenv("KR_MAX_TOKENS_CHAT",   "8192"))
+MAX_TOKENS_OPENAI = int(os.getenv("KR_MAX_TOKENS_OPENAI", "4096"))
+MAX_TOKENS_LUKA   = int(os.getenv("KR_MAX_TOKENS_LUKA",   "600"))
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Definición de tools que conoce el modelo
-# ─────────────────────────────────────────────────────────────────────────────
-_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": (
-                "Busca información actualizada en internet. "
-                "Úsala cuando el usuario pregunte por eventos recientes, noticias, precios actuales, "
-                "o cualquier dato que pueda haber cambiado después de tu fecha de entrenamiento."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "La consulta de búsqueda."
-                    }
-                },
-                "required": ["query"]
-            }
-        }
-    }
-]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Búsqueda web (DuckDuckGo — sin API key)
-# pip install duckduckgo-search --break-system-packages
-# ─────────────────────────────────────────────────────────────────────────────
-def _web_search(query: str, max_results: int = 5) -> str:
-    try:
-        from duckduckgo_search import DDGS
-    except ImportError:
-        return "Búsqueda web no disponible. Instala: pip install duckduckgo-search --break-system-packages"
-    try:
-        resultados = []
-        with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=max_results):
-                resultados.append(f"- {r['title']}: {r['body']} ({r['href']})")
-        return "\n".join(resultados) if resultados else f"Sin resultados para: {query}"
-    except Exception as e:
-        return f"Error en búsqueda web: {e}"
+# El clasificador solo necesita devolver JSON corto
+_MAX_TOKENS_CLASIFICADOR = 64
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -141,7 +97,7 @@ class _ModeloMLX:
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 def _extraer_texto_content(content: Any) -> str:
-    """Normaliza content: str, lista de dicts, o lista de objetos → str."""
+    """Normaliza content: str, lista de dicts o lista de objetos → str."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -155,11 +111,10 @@ def _extraer_texto_content(content: Any) -> str:
     return str(content)
 
 
-def _construir_prompt(mensajes: list[dict], system: Any = None, con_tools: bool = True, forzar_tool: bool = False) -> str:
+def _construir_prompt(mensajes: list[dict], system: Any = None) -> str:
     """
-    Construye el prompt usando processor.apply_chat_template() directamente.
-    Esto es crítico: mlx_vlm.prompt_utils.apply_chat_template descarta las tools
-    y otros kwargs. El processor las acepta correctamente.
+    Construye el prompt multi-turno usando processor.apply_chat_template()
+    directamente — no mlx_vlm.prompt_utils que descarta kwargs adicionales.
     """
     _, processor, _ = _ModeloMLX.get()
 
@@ -178,123 +133,152 @@ def _construir_prompt(mensajes: list[dict], system: Any = None, con_tools: bool 
     if not msgs:
         raise ValueError("No hay mensajes válidos.")
 
-    kwargs = {
-        "tokenize":             False,
-        "add_generation_prompt": True,
-        "enable_thinking":      False,
-    }
-    if con_tools:
-        kwargs["tools"] = _TOOLS
-        if forzar_tool:
-            kwargs["tool_choice"] = {
-                "type": "function",
-                "function": {"name": "web_search"}
-            }
-
-    # Llamada directa al processor — no a mlx_vlm.prompt_utils
-    #return processor.apply_chat_template(msgs, **kwargs)
-    prompt = processor.apply_chat_template(msgs, **kwargs)
-    logger.info("PROMPT GENERADO (primeros 800 chars):\n%s", prompt[:800])
-    return prompt
-
-
-def _parsear_tool_call(texto: str) -> Optional[dict]:
-    """
-    Detecta tool calls en el formato nativo de Qwen3.5 (Qwen3-Coder XML):
-      <function=web_search><parameter=query>consulta aquí</parameter></function>
-    También detecta el formato Hermes JSON como fallback:
-      <tool_call>{"name": "web_search", "arguments": {"query": "..."}}</tool_call>
-    """
-    # Formato Qwen3-Coder XML (nativo de Qwen3.5)
-    match = re.search(
-        r"<function=(\w+)>(.*?)</function>",
-        texto, re.DOTALL
+    return processor.apply_chat_template(
+        msgs,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=False,
     )
-    if match:
-        func_name = match.group(1)
-        params_raw = match.group(2)
-        params = {}
-        for p in re.finditer(r"<parameter=(\w+)>(.*?)</parameter>", params_raw, re.DOTALL):
-            params[p.group(1)] = p.group(2).strip()
-        return {"name": func_name, "arguments": params}
 
-    # Formato Hermes JSON fallback
-    match = re.search(r"<tool_call>(.*?)</tool_call>", texto, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(1).strip())
-        except json.JSONDecodeError:
-            pass
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Búsqueda web — DuckDuckGo, sin API key
+# pip install duckduckgo-search --break-system-packages
+# ─────────────────────────────────────────────────────────────────────────────
+def _web_search(query: str, max_results: int = 5) -> Optional[str]:
+    """
+    Devuelve los resultados como string, o None si no hay internet o falla la búsqueda.
+    Nunca lanza excepción — el caller decide qué hacer con None.
+    """
+    try:
+        from duckduckgo_search import DDGS
+    except ImportError:
+        logger.warning("duckduckgo-search no instalado. Ejecuta: pip install duckduckgo-search --break-system-packages")
+        return None
+    try:
+        resultados = []
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=max_results):
+                resultados.append(f"- {r['title']}: {r['body']} ({r['href']})")
+        return "\n".join(resultados) if resultados else None
+    except Exception as e:
+        logger.warning("Búsqueda web falló (sin internet?): %s", e)
+        return None
+
+
+def _clasificar_busqueda(pregunta: str) -> Optional[str]:
+    """
+    Inferencia ligera (64 tokens) sobre la última pregunta del usuario.
+    El modelo responde SOLO con JSON: {"buscar": true, "query": "..."} o {"buscar": false}.
+    Devuelve la query si se necesita búsqueda, None si no.
+
+    Por qué funciona: el modelo es muy confiable siguiendo instrucciones de
+    JSON simple en un solo turno — mucho más que emitir tool_calls espontáneos.
+    """
+    model, processor, config = _ModeloMLX.get()
+
+    system_prompt = (
+        'Eres un clasificador. Responde ÚNICAMENTE con JSON válido, sin texto adicional, '
+        'sin explicaciones, sin markdown. '
+        'Formato exacto: {"buscar": true, "query": "..."} o {"buscar": false}. '
+        'Responde buscar=true solo si la pregunta requiere información actualizada '
+        'que no está en tu entrenamiento: precios en tiempo real, noticias recientes, '
+        'eventos actuales, datos posteriores a 2024. '
+        'Responde buscar=false para conocimiento general, matemáticas, código, historia, '
+        'conceptos, o cualquier cosa que no dependa de datos recientes.'
+    )
+
+    prompt = vlm_apply_chat_template(
+        processor,
+        config,
+        pregunta,
+        num_images=0,
+        enable_thinking=False,
+        system_prompt=system_prompt,
+    )
+
+    result    = vlm_generate(model, processor, prompt, max_tokens=_MAX_TOKENS_CLASIFICADOR, verbose=False)
+    respuesta = result.text.strip() if hasattr(result, "text") else str(result).strip()
+
+    # Limpiar posibles artefactos de markdown
+    respuesta = re.sub(r"```json|```", "", respuesta).strip()
+
+    try:
+        datos = json.loads(respuesta)
+        if datos.get("buscar") is True:
+            query = datos.get("query", "").strip()
+            if query:
+                logger.info("Clasificador: búsqueda necesaria → %r", query)
+                return query
+    except (json.JSONDecodeError, AttributeError):
+        logger.warning("Clasificador no devolvió JSON válido: %r", respuesta[:100])
 
     return None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Inferencia de chat con búsqueda web automática
+# ─────────────────────────────────────────────────────────────────────────────
 def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MAX_TOKENS_CHAT) -> str:
     """
-    Inferencia multi-turno con tool calling nativo de Qwen3.5.
-    1. Primera inferencia con tools definidas en el chat template.
-    2. Si el modelo emite un tool call, ejecuta la tool y hace segunda inferencia.
+    Flujo:
+      1. Clasificador ligero sobre la última pregunta del usuario.
+      2a. buscar=true  → _web_search → inferencia final con resultados en contexto.
+      2b. buscar=false → inferencia directa sin overhead.
     """
     model, processor, _ = _ModeloMLX.get()
 
-    prompt  = _construir_prompt(mensajes, system, con_tools=True, forzar_tool=True)
-    result  = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False)
-    respuesta = result.text.strip() if hasattr(result, "text") else str(result).strip()
-    logger.info("Primera inferencia (primeros 300 chars): %r", respuesta[:300])
+    # Extraer la última pregunta del usuario para el clasificador
+    ultima_pregunta = ""
+    for m in reversed(mensajes):
+        if m.get("role") == "user":
+            ultima_pregunta = _extraer_texto_content(m.get("content", ""))
+            break
 
-    tool_call = _parsear_tool_call(respuesta)
+    query_busqueda = _clasificar_busqueda(ultima_pregunta) if ultima_pregunta else None
 
-    if tool_call and tool_call.get("name") == "web_search":
-        query = tool_call["arguments"].get("query", "")
-        logger.info("Tool call: web_search(query=%r)", query)
-
-        resultado_busqueda = _web_search(query)
-        logger.info("Búsqueda completada, %d chars de resultado", len(resultado_busqueda))
-
-        # Segunda inferencia con el resultado de la búsqueda
-        mensajes_con_resultado = list(mensajes) + [
-            {"role": "assistant", "content": respuesta},
-            {
-                "role": "user",
-                "content": (
-                    f"Resultado de la búsqueda web para '{query}':\n\n"
-                    f"{resultado_busqueda}\n\n"
-                    "Con esta información actualizada, responde la pregunta original de forma completa."
-                )
-            },
-        ]
-        # Segunda inferencia sin tools (ya tenemos el resultado)
-        prompt2   = _construir_prompt(mensajes_con_resultado, system, con_tools=False)
-        result2   = vlm_generate(model, processor, prompt2, max_tokens=max_tokens, verbose=False)
-        respuesta = result2.text.strip() if hasattr(result2, "text") else str(result2).strip()
+    if query_busqueda:
+        resultado_busqueda = _web_search(query_busqueda)
+        if resultado_busqueda:
+            logger.info("Búsqueda completada (%d chars)", len(resultado_busqueda))
+            mensajes_con_contexto = list(mensajes) + [
+                {
+                    "role": "user",
+                    "content": (
+                        f"[Información actualizada de internet]\n"
+                        f"Búsqueda realizada: '{query_busqueda}'\n\n"
+                        f"{resultado_busqueda}\n\n"
+                        "Usa esta información para responder la pregunta anterior de forma completa."
+                    ),
+                }
+            ]
+            prompt = _construir_prompt(mensajes_con_contexto, system)
+        else:
+            # Sin internet o sin resultados — inferencia directa sin contexto web
+            logger.warning("Búsqueda falló o sin resultados, respondiendo con conocimiento propio.")
+            prompt = _construir_prompt(mensajes, system)
     else:
-        # El modelo no usó la tool — respuesta directa sin búsqueda
-        logger.info("Modelo respondió sin tool call.")
-        
-    return respuesta
+        prompt = _construir_prompt(mensajes, system)
+
+    result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False)
+    return result.text.strip() if hasattr(result, "text") else str(result).strip()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Motor de inferencia compartido
+# Motor de inferencia compartido — API pública para routers hijos
 # ─────────────────────────────────────────────────────────────────────────────
 class MotorInferencia:
     """
-    API pública de inferencia para los routers hijos.
-    - texto()  → un solo turno, sin tools (LUKA y proyectos similares).
-    - chat()   → multi-turno con tool calling nativo (chatbot, Claude Code).
-    - imagen() → inferencia con imagen (facturas LUKA).
-    - extraer_json() → extrae JSON de la respuesta del modelo.
+    - texto()        → un solo turno sin búsqueda web. Para routers de proyecto (LUKA).
+    - chat()         → multi-turno con búsqueda web automática. Para chatbot y Claude Code.
+    - imagen()       → inferencia con imagen. Para facturas de LUKA.
+    - extraer_json() → extrae el primer JSON válido de la respuesta del modelo.
     """
 
     @staticmethod
     def texto(prompt_usuario: str, max_tokens: int = MAX_TOKENS_LUKA) -> str:
-        """Inferencia de un solo turno sin tools. Para routers de proyecto (LUKA)."""
-        model, processor, _ = _ModeloMLX.get()
-        # Para LUKA usamos mlx_vlm directamente — no necesitamos tools
-        from mlx_vlm.prompt_utils import apply_chat_template
-        from mlx_vlm.utils import load_config
-        config = load_config(MODEL_PATH)
-        prompt = apply_chat_template(
+        model, processor, config = _ModeloMLX.get()
+        prompt = vlm_apply_chat_template(
             processor, config, prompt_usuario,
             num_images=0,
             enable_thinking=False,
@@ -304,23 +288,18 @@ class MotorInferencia:
 
     @staticmethod
     def chat(mensajes: list[dict], system: Any = None, max_tokens: int = MAX_TOKENS_CHAT) -> str:
-        """Inferencia multi-turno con tool calling nativo. Para /v1/messages y /v1/chat/completions."""
         return _inferir_chat(mensajes, system=system, max_tokens=max_tokens)
 
     @staticmethod
     def imagen(prompt_usuario: str, imagen_b64: str, max_tokens: int = MAX_TOKENS_LUKA) -> str:
-        """Inferencia con imagen. Para facturas de LUKA."""
-        model, processor, _ = _ModeloMLX.get()
-        from mlx_vlm.prompt_utils import apply_chat_template
-        from mlx_vlm.utils import load_config
-        config   = load_config(MODEL_PATH)
+        model, processor, config = _ModeloMLX.get()
         img_bytes = base64.b64decode(imagen_b64)
         tmp_path  = os.path.join(tempfile.gettempdir(), f"kr_img_{uuid.uuid4().hex}.jpg")
         try:
             img = Image.open(io.BytesIO(img_bytes))
             img.thumbnail((IMG_MAX_PX, IMG_MAX_PX))
             img.save(tmp_path, "JPEG")
-            prompt = apply_chat_template(
+            prompt = vlm_apply_chat_template(
                 processor, config, prompt_usuario,
                 num_images=1,
                 enable_thinking=False,
@@ -333,7 +312,6 @@ class MotorInferencia:
 
     @staticmethod
     def extraer_json(texto: str) -> Any:
-        """Extrae el primer JSON válido (objeto o lista) del texto del modelo."""
         try:
             return json.loads(texto)
         except json.JSONDecodeError:
@@ -372,22 +350,22 @@ class _OAIMensaje(BaseModel):
     content: Any
 
 class _OAIRequest(BaseModel):
-    model:       Optional[str]         = None
-    messages:    list[_OAIMensaje]     = []
-    max_tokens:  Optional[int]         = None
-    temperature: Optional[float]       = None
-    stream:      Optional[bool]        = False
+    model:       Optional[str]     = None
+    messages:    list[_OAIMensaje] = []
+    max_tokens:  Optional[int]     = None
+    temperature: Optional[float]   = None
+    stream:      Optional[bool]    = False
 
 class _AnthropicMensaje(BaseModel):
     role:    str
     content: Any
 
 class _AnthropicRequest(BaseModel):
-    model:      Optional[str]              = None
-    messages:   list[_AnthropicMensaje]    = []
-    system:     Optional[Any]              = None
-    max_tokens: Optional[int]              = None
-    stream:     Optional[bool]             = False
+    model:      Optional[str]           = None
+    messages:   list[_AnthropicMensaje] = []
+    system:     Optional[Any]           = None
+    max_tokens: Optional[int]           = None
+    stream:     Optional[bool]          = False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -396,9 +374,9 @@ class _AnthropicRequest(BaseModel):
 class KingsrowAI:
 
     def __init__(self) -> None:
-        self._motor:   MotorInferencia   = MotorInferencia()
-        self._routers: list[BaseRouter]  = []
-        self._app:     Optional[FastAPI] = None
+        self._motor:   MotorInferencia  = MotorInferencia()
+        self._routers: list[BaseRouter] = []
+        self._app:     Optional[FastAPI]= None
 
     def registrar(self, router_cls: type[BaseRouter]) -> "KingsrowAI":
         instancia = router_cls(self._motor)
@@ -415,7 +393,7 @@ class KingsrowAI:
         app = FastAPI(
             title="Kingsrow AI",
             description="Motor de inferencia MLX compartido — Kingsrow Home Lab",
-            version="3.1.0",
+            version="3.2.0",
             lifespan=lifespan,
         )
 
@@ -428,8 +406,7 @@ class KingsrowAI:
                 async def dispatch(self, request: Request, call_next):
                     if request.url.path in ("/health", "/v1/models"):
                         return await call_next(request)
-                    key = request.headers.get("X-API-Key", "")
-                    if key != API_KEY:
+                    if request.headers.get("X-API-Key", "") != API_KEY:
                         return JSONResponse({"detail": "API key inválida o ausente."}, status_code=401)
                     return await call_next(request)
 
@@ -514,7 +491,7 @@ class KingsrowAI:
             if not req.messages:
                 raise HTTPException(status_code=422, detail="'messages' no puede estar vacío.")
 
-            system  = None
+            system   = None
             mensajes = []
             for m in req.messages:
                 if m.role == "system":
