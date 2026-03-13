@@ -96,20 +96,33 @@ class _ModeloMLX:
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
-def _extraer_texto_content(content: Any) -> str:
-    """Normaliza content: str, lista de dicts o lista de objetos → str."""
+def _extraer_texto_content(content):
+    """
+    Normaliza content → str. Maneja todos los tipos de bloques de Claude Code:
+    text, tool_use, tool_result. Imágenes descartadas.
+    """
     if isinstance(content, str):
         return content
     if isinstance(content, list):
         partes = []
         for b in content:
-            if isinstance(b, dict) and b.get("type") == "text":
-                partes.append(b.get("text", ""))
-            elif hasattr(b, "type") and b.type == "text":
-                partes.append(b.text or "")
-        return " ".join(partes)
+            t = b.get("type") if isinstance(b, dict) else getattr(b, "type", None)
+            if t == "text":
+                val = b.get("text", "") if isinstance(b, dict) else getattr(b, "text", "")
+                partes.append(val or "")
+            elif t == "tool_use":
+                name = b.get("name", "")  if isinstance(b, dict) else getattr(b, "name", "")
+                inp  = b.get("input", {}) if isinstance(b, dict) else getattr(b, "input", {})
+                tid  = b.get("id", "")    if isinstance(b, dict) else getattr(b, "id", "")
+                partes.append("[tool_use id=" + tid + " name=" + name + " input=" + json.dumps(inp, ensure_ascii=False) + "]")
+            elif t == "tool_result":
+                tid  = b.get("tool_use_id", "") if isinstance(b, dict) else getattr(b, "tool_use_id", "")
+                cont = b.get("content", "")     if isinstance(b, dict) else getattr(b, "content", "")
+                if isinstance(cont, list):
+                    cont = " ".join(c.get("text", "") if isinstance(c, dict) else str(c) for c in cont)
+                partes.append("[tool_result id=" + tid + "]\n" + str(cont) + "\n[/tool_result]")
+        return "\n".join(partes)
     return str(content)
-
 
 def _construir_prompt(mensajes: list[dict], system: Any = None) -> str:
     """
@@ -224,10 +237,6 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
     Nunca incluye queries para fecha/hora — eso lo provee el servidor.
     Queries siempre en inglés.
     """
-    # Si el mensaje es output de herramienta/terminal, no buscar
-    if len(pregunta) > 500 or pregunta.strip().startswith(('/', 'total ', 'drwx', '-rw', 'find')):
-        return []
-    
     model, processor, _ = _ModeloMLX.get()
 
     system_prompt = (
