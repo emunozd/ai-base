@@ -331,7 +331,6 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
                 any((b.get("type") if isinstance(b, dict) else getattr(b, "type", None)) == "tool_result"
                     for b in content_raw)
             )
-            logger.info("ULTIMO_MSG role=%s es_tool_result=%s content_raw=%r", m.get("role"), es_tool_result, str(content_raw)[:200])
             if not es_tool_result:
                 ultima_pregunta = _extraer_texto_content(content_raw)
             break
@@ -472,6 +471,8 @@ class _AnthropicRequest(BaseModel):
     system:     Optional[Any]           = None
     max_tokens: Optional[int]           = None
     stream:     Optional[bool]          = False
+    tools:      Optional[list[Any]]     = None
+    tool_choice: Optional[Any]          = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -564,8 +565,26 @@ class KingsrowAI:
             created    = int(time.time())
             model_name = req.model or MODEL_PATH
 
+            # Inyectar definición de herramientas en el system prompt
+            # para que Qwen sepa qué tools puede invocar y en qué formato
+            system_con_tools = req.system
+            if req.tools:
+                tools_txt = json.dumps(req.tools, ensure_ascii=False, indent=2)
+                tools_block = (
+                    "Tienes acceso a las siguientes herramientas. "
+                    "Cuando necesites usar una, emite EXACTAMENTE este formato y nada más:\n"
+                    "<tool_call>{\"name\": \"<nombre>\", \"input\": {<parametros>}}</tool_call>\n\n"
+                    "Herramientas disponibles:\n" + tools_txt
+                )
+                if isinstance(system_con_tools, str) and system_con_tools.strip():
+                    system_con_tools = system_con_tools + "\n\n" + tools_block
+                elif isinstance(system_con_tools, list):
+                    system_con_tools = list(system_con_tools) + [{"type": "text", "text": tools_block}]
+                else:
+                    system_con_tools = tools_block
+
             try:
-                respuesta = motor.chat(mensajes, system=req.system, max_tokens=max_tok)
+                respuesta = motor.chat(mensajes, system=system_con_tools, max_tokens=max_tok)
             except Exception as e:
                 logger.exception("Error en /v1/messages")
                 raise HTTPException(status_code=500, detail=str(e))
