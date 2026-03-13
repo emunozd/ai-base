@@ -160,7 +160,7 @@ def _fetch_url(url: str, max_chars: int = 3000) -> Optional[str]:
     Devuelve texto plano truncado o None si falla.
     """
     if _url_es_antigua(url):
-        logger.warning("fetch_url omitida (URL antigua): %s", url)
+        #logger.warning("fetch_url omitida (URL antigua): %s", url)
         return None
     try:
         import httpx
@@ -168,7 +168,7 @@ def _fetch_url(url: str, max_chars: int = 3000) -> Optional[str]:
         headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
         r = httpx.get(url, headers=headers, timeout=8, follow_redirects=True)
         if r.status_code >= 400:
-            logger.warning("fetch_url rechazada HTTP %d: %s", r.status_code, url)
+            #logger.warning("fetch_url rechazada HTTP %d: %s", r.status_code, url)
             return None
         soup = BeautifulSoup(r.text, "html.parser")
         for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
@@ -205,7 +205,7 @@ def _web_search(query: str, max_results: int = 5) -> Optional[str]:
         for titulo, url, snippet in urls[:3]:
             contenido = _fetch_url(url)
             if contenido:
-                logger.info("Fetch exitoso: %s", url)
+                #logger.info("Fetch exitoso: %s", url)
                 return f"Fuente: {titulo} ({url})\n\n{contenido}"
 
         # Fallback a snippets si el fetch falla para todas
@@ -224,6 +224,10 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
     Nunca incluye queries para fecha/hora — eso lo provee el servidor.
     Queries siempre en inglés.
     """
+    # Si el mensaje es output de herramienta/terminal, no buscar
+    if len(pregunta) > 500 or pregunta.strip().startswith(('/', 'total ', 'drwx', '-rw', 'find')):
+        return []
+    
     model, processor, _ = _ModeloMLX.get()
 
     system_prompt = (
@@ -296,7 +300,7 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
     for query in queries:
         resultado = _web_search(query)
         if resultado:
-            logger.info("Búsqueda OK para %r (%d chars)", query, len(resultado))
+            #logger.info("Búsqueda OK para %r (%d chars)", query, len(resultado))
             bloques_web.append(f"Búsqueda: '{query}'\n{resultado}")
         else:
             logger.warning("Sin resultados para %r", query)
