@@ -175,14 +175,26 @@ def _parsear_tool_calls(texto: str):
     for m in patron.finditer(texto):
         try:
             datos = json.loads(m.group(1).strip())
+            nombre = datos.get("name", "unknown")
+            # Qwen puede poner los params en input/parameters/arguments
+            # o directamente en el root junto a "name"
+            if "input" in datos:
+                inp = datos["input"]
+            elif "parameters" in datos:
+                inp = datos["parameters"]
+            elif "arguments" in datos:
+                inp = datos["arguments"]
+            else:
+                # params en el root: todo excepto "name"
+                inp = {k: v for k, v in datos.items() if k != "name"}
             tool_blocks.append({
                 "type":  "tool_use",
                 "id":    "toolu_" + uuid.uuid4().hex[:16],
-                "name":  datos.get("name", "unknown"),
-                "input": datos.get("input", datos.get("parameters", datos.get("arguments", {}))),
+                "name":  nombre,
+                "input": inp,
             })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("_parsear_tool_calls falló: %s", e)
     texto_limpio = patron.sub("", texto_limpio).strip()
     return tool_blocks, texto_limpio
 
