@@ -8,28 +8,25 @@ Clase base que:
   - Expone POST /v1/messages  compatible con Anthropic / Claude Code (SSE).
   - Expone POST /v1/chat/completions compatible con OpenAI / AnythingLLM (SSE).
   - Expone GET  /v1/models y GET /health.
-  - Búsqueda web via DuckDuckGo cuando el modelo la solicita (tool_use).
-
-Cambios respecto a la versión anterior:
-  - chat() usa apply_chat_template con lista de mensajes estructurados (multi-turno real).
-  - max_tokens por defecto: 8192 en /v1/messages, 4096 en /v1/chat/completions.
-  - Bucle tool_use: si el modelo pide web_search, ejecuta y hace segunda inferencia.
-  - system como Any (acepta str o lista de bloques que manda Claude Code).
-
-Para agregar un proyecto nuevo:
-  1. Crea una clase hija de BaseRouter en su propio archivo.
-  2. En main.py instanciala y pásala a KingsrowAI.registrar().
+  - Tool calling nativo de Qwen3.5: usa processor.apply_chat_template() directamente
+    (no mlx_vlm.prompt_utils.apply_chat_template que descarta las tools).
+    Qwen3.5 fue entrenado en formato Qwen3-Coder XML:
+      <function=web_search><parameter=query>...</parameter></function>
+    El servidor detecta ese formato, ejecuta DuckDuckGo, y hace segunda inferencia.
 
 Arranque:
     source ~/mlx-env/bin/activate
     python ~/projects/AIBase/main.py
 
 Variables de entorno (todas opcionales):
-    KR_MODEL_PATH   (default: mlx-community/Qwen3.5-35B-A3B-4bit)
-    KR_HOST         (default: 192.168.0.90)
-    KR_PORT         (default: 8181)
-    KR_IMG_MAX      (default: 1024)
-    KR_API_KEY      (default: vacío = sin auth)
+    KR_MODEL_PATH            (default: mlx-community/Qwen3.5-35B-A3B-4bit)
+    KR_HOST                  (default: 192.168.0.90)
+    KR_PORT                  (default: 8181)
+    KR_IMG_MAX               (default: 1024)
+    KR_API_KEY               (default: vacío = sin auth)
+    KR_MAX_TOKENS_CHAT       (default: 8192)
+    KR_MAX_TOKENS_OPENAI     (default: 4096)
+    KR_MAX_TOKENS_LUKA       (default: 600)
 """
 
 import base64
@@ -48,11 +45,8 @@ from typing import Any, Generator, Optional
 import uvicorn
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from mlx_lm import load as lm_load
-from mlx_lm import generate as lm_generate
 from mlx_vlm import generate as vlm_generate
 from mlx_vlm import load as vlm_load
-from mlx_vlm.prompt_utils import apply_chat_template
 from mlx_vlm.utils import load_config
 from PIL import Image
 from pydantic import BaseModel
@@ -63,80 +57,67 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
-MODEL_PATH = os.getenv("KR_MODEL_PATH", "mlx-community/Qwen3.5-35B-A3B-4bit")
-HOST       = os.getenv("KR_HOST",       "192.168.0.90")
-PORT       = int(os.getenv("KR_PORT",   "8181"))
-IMG_MAX_PX = int(os.getenv("KR_IMG_MAX","1024"))
-API_KEY    = os.getenv("KR_API_KEY",    "")
-
-# Límites de tokens por defecto — ajustables via env
-MAX_TOKENS_CHAT    = int(os.getenv("KR_MAX_TOKENS_CHAT",    "8192"))   # /v1/messages (Claude Code)
-MAX_TOKENS_OPENAI  = int(os.getenv("KR_MAX_TOKENS_OPENAI",  "4096"))   # /v1/chat/completions (AnythingLLM)
-MAX_TOKENS_LUKA    = int(os.getenv("KR_MAX_TOKENS_LUKA",    "600"))    # endpoints LUKA
+MODEL_PATH           = os.getenv("KR_MODEL_PATH",        "mlx-community/Qwen3.5-35B-A3B-4bit")
+HOST                 = os.getenv("KR_HOST",               "192.168.0.90")
+PORT                 = int(os.getenv("KR_PORT",           "8181"))
+IMG_MAX_PX           = int(os.getenv("KR_IMG_MAX",        "1024"))
+API_KEY              = os.getenv("KR_API_KEY",            "")
+MAX_TOKENS_CHAT      = int(os.getenv("KR_MAX_TOKENS_CHAT",   "8192"))
+MAX_TOKENS_OPENAI    = int(os.getenv("KR_MAX_TOKENS_OPENAI", "4096"))
+MAX_TOKENS_LUKA      = int(os.getenv("KR_MAX_TOKENS_LUKA",   "600"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Búsqueda web (DuckDuckGo — sin API key, sin límite)
+# Definición de tools que conoce el modelo
+# ─────────────────────────────────────────────────────────────────────────────
+_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Busca información actualizada en internet. "
+                "Úsala cuando el usuario pregunte por eventos recientes, noticias, precios actuales, "
+                "o cualquier dato que pueda haber cambiado después de tu fecha de entrenamiento."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "La consulta de búsqueda."
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    }
+]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Búsqueda web (DuckDuckGo — sin API key)
+# pip install duckduckgo-search --break-system-packages
 # ─────────────────────────────────────────────────────────────────────────────
 def _web_search(query: str, max_results: int = 5) -> str:
-    """
-    Busca en DuckDuckGo y devuelve un string con los resultados.
-    Se usa como tool cuando el modelo lo solicita.
-    Requiere: pip install duckduckgo-search --break-system-packages
-    Si no está instalado devuelve un mensaje de error amigable.
-    """
     try:
         from duckduckgo_search import DDGS
     except ImportError:
         return "Búsqueda web no disponible. Instala: pip install duckduckgo-search --break-system-packages"
-
     try:
         resultados = []
         with DDGS() as ddgs:
             for r in ddgs.text(query, max_results=max_results):
                 resultados.append(f"- {r['title']}: {r['body']} ({r['href']})")
-        return "\n".join(resultados) if resultados else "Sin resultados para: " + query
+        return "\n".join(resultados) if resultados else f"Sin resultados para: {query}"
     except Exception as e:
         return f"Error en búsqueda web: {e}"
-
-
-# Definición de la tool web_search que se le pasa al modelo
-_WEB_SEARCH_TOOL_DEF = {
-    "type": "function",
-    "function": {
-        "name": "web_search",
-        "description": (
-            "Busca información actualizada en internet usando DuckDuckGo. "
-            "Úsala cuando el usuario pregunte por eventos recientes, noticias, precios, "
-            "o cualquier dato que pueda haber cambiado después de tu fecha de entrenamiento."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "La consulta de búsqueda en el idioma más apropiado."
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "Número máximo de resultados (default 5, max 10).",
-                    "default": 5
-                }
-            },
-            "required": ["query"]
-        }
-    }
-}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Singleton del modelo
 # ─────────────────────────────────────────────────────────────────────────────
 class _ModeloMLX:
-    """
-    Carga el modelo MLX una sola vez y lo mantiene en memoria.
-    Todos los routers comparten esta instancia — los 19 GB se pagan una vez.
-    """
     _model:     Any = None
     _processor: Any = None
     _config:    Any = None
@@ -157,10 +138,10 @@ class _ModeloMLX:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helpers internos
+# Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 def _extraer_texto_content(content: Any) -> str:
-    """Normaliza content que puede ser str, lista de bloques dict o lista de objetos."""
+    """Normaliza content: str, lista de dicts, o lista de objetos → str."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -174,14 +155,14 @@ def _extraer_texto_content(content: Any) -> str:
     return str(content)
 
 
-def _construir_prompt_chat(mensajes: list[dict], system: Any = None) -> str:
+def _construir_prompt(mensajes: list[dict], system: Any = None, con_tools: bool = True) -> str:
     """
-    Construye el prompt completo para inferencia de texto multi-turno.
-    Usa el formato de chat template de Qwen directamente vía apply_chat_template.
+    Construye el prompt usando processor.apply_chat_template() directamente.
+    Esto es crítico: mlx_vlm.prompt_utils.apply_chat_template descarta las tools
+    y otros kwargs. El processor las acepta correctamente.
     """
-    _, processor, config = _ModeloMLX.get()
+    _, processor, _ = _ModeloMLX.get()
 
-    # Armar lista de mensajes en formato estándar {role, content: str}
     msgs = []
     if system:
         system_texto = _extraer_texto_content(system)
@@ -195,72 +176,41 @@ def _construir_prompt_chat(mensajes: list[dict], system: Any = None) -> str:
             msgs.append({"role": role, "content": content})
 
     if not msgs:
-        raise ValueError("No hay mensajes válidos para construir el prompt.")
+        raise ValueError("No hay mensajes válidos.")
 
-    # apply_chat_template acepta lista de dicts con role/content
-    prompt = apply_chat_template(
-        processor,
-        config,
-        msgs,          # ← lista estructurada, no string — multi-turno real
-        num_images=0,
-        enable_thinking=False,
+    kwargs = {
+        "tokenize":             False,
+        "add_generation_prompt": True,
+        "enable_thinking":      False,
+    }
+    if con_tools:
+        kwargs["tools"] = _TOOLS
+
+    # Llamada directa al processor — no a mlx_vlm.prompt_utils
+    return processor.apply_chat_template(msgs, **kwargs)
+
+
+def _parsear_tool_call(texto: str) -> Optional[dict]:
+    """
+    Detecta tool calls en el formato nativo de Qwen3.5 (Qwen3-Coder XML):
+      <function=web_search><parameter=query>consulta aquí</parameter></function>
+    También detecta el formato Hermes JSON como fallback:
+      <tool_call>{"name": "web_search", "arguments": {"query": "..."}}</tool_call>
+    """
+    # Formato Qwen3-Coder XML (nativo de Qwen3.5)
+    match = re.search(
+        r"<function=(\w+)>(.*?)</function>",
+        texto, re.DOTALL
     )
-    return prompt
+    if match:
+        func_name = match.group(1)
+        params_raw = match.group(2)
+        params = {}
+        for p in re.finditer(r"<parameter=(\w+)>(.*?)</parameter>", params_raw, re.DOTALL):
+            params[p.group(1)] = p.group(2).strip()
+        return {"name": func_name, "arguments": params}
 
-
-def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = 8192) -> str:
-    """
-    Inferencia multi-turno con soporte de tool_use (web_search).
-    Bucle:
-      1. Genera respuesta.
-      2. Si el modelo pide web_search, ejecuta y agrega resultado al historial.
-      3. Segunda inferencia con el resultado de la búsqueda.
-    Máximo 1 vuelta de tool_use para evitar loops infinitos.
-    """
-    model, processor, _ = _ModeloMLX.get()
-
-    prompt = _construir_prompt_chat(mensajes, system)
-    result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False)
-    respuesta = result.text.strip() if hasattr(result, "text") else str(result).strip()
-    logger.info("Respuesta cruda del modelo: %r", respuesta[:500])
-
-
-    # Detectar si el modelo quiere hacer una búsqueda web
-    # Qwen puede indicarlo con un bloque JSON de tool_call o con texto explícito
-    tool_call = _detectar_tool_call(respuesta)
-    if tool_call and tool_call.get("name") == "web_search":
-        query       = tool_call.get("arguments", {}).get("query", "")
-        max_results = tool_call.get("arguments", {}).get("max_results", 5)
-        logger.info("Tool call: web_search(query=%r)", query)
-
-        resultado_busqueda = _web_search(query, max_results=max_results)
-
-        # Agregar el resultado al historial y hacer segunda inferencia
-        mensajes_con_tool = list(mensajes) + [
-            {"role": "assistant", "content": respuesta},
-            {
-                "role": "user",
-                "content": (
-                    f"Resultado de la búsqueda web para '{query}':\n\n"
-                    f"{resultado_busqueda}\n\n"
-                    "Con esta información, responde la pregunta original de forma completa."
-                )
-            },
-        ]
-        prompt2  = _construir_prompt_chat(mensajes_con_tool, system)
-        result2  = vlm_generate(model, processor, prompt2, max_tokens=max_tokens, verbose=False)
-        respuesta = result2.text.strip() if hasattr(result2, "text") else str(result2).strip()
-
-    return respuesta
-
-
-def _detectar_tool_call(texto: str) -> Optional[dict]:
-    """
-    Intenta detectar un tool_call en la respuesta del modelo.
-    Qwen puede devolver JSON con {"name": "web_search", "arguments": {...}}
-    dentro de bloques <tool_call>...</tool_call> o directamente.
-    """
-    # Buscar bloque <tool_call>
+    # Formato Hermes JSON fallback
     match = re.search(r"<tool_call>(.*?)</tool_call>", texto, re.DOTALL)
     if match:
         try:
@@ -268,15 +218,49 @@ def _detectar_tool_call(texto: str) -> Optional[dict]:
         except json.JSONDecodeError:
             pass
 
-    # Buscar JSON directo con "name" y "arguments"
-    match = re.search(r'\{"name"\s*:\s*"(\w+)".*?"arguments"\s*:\s*(\{.*?\})\s*\}', texto, re.DOTALL)
-    if match:
-        try:
-            return {"name": match.group(1), "arguments": json.loads(match.group(2))}
-        except json.JSONDecodeError:
-            pass
-
     return None
+
+
+def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MAX_TOKENS_CHAT) -> str:
+    """
+    Inferencia multi-turno con tool calling nativo de Qwen3.5.
+    1. Primera inferencia con tools definidas en el chat template.
+    2. Si el modelo emite un tool call, ejecuta la tool y hace segunda inferencia.
+    """
+    model, processor, _ = _ModeloMLX.get()
+
+    prompt  = _construir_prompt(mensajes, system, con_tools=True)
+    result  = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False)
+    respuesta = result.text.strip() if hasattr(result, "text") else str(result).strip()
+    logger.info("Primera inferencia (primeros 300 chars): %r", respuesta[:300])
+
+    tool_call = _parsear_tool_call(respuesta)
+
+    if tool_call and tool_call.get("name") == "web_search":
+        query = tool_call["arguments"].get("query", "")
+        logger.info("Tool call detectado: web_search(query=%r)", query)
+
+        resultado_busqueda = _web_search(query)
+        logger.info("Búsqueda completada, %d chars de resultado", len(resultado_busqueda))
+
+        # Segunda inferencia con el resultado de la búsqueda
+        mensajes_con_resultado = list(mensajes) + [
+            {"role": "assistant", "content": respuesta},
+            {
+                "role": "user",
+                "content": (
+                    f"Resultado de la búsqueda web para '{query}':\n\n"
+                    f"{resultado_busqueda}\n\n"
+                    "Con esta información actualizada, responde la pregunta original de forma completa."
+                )
+            },
+        ]
+        # Segunda inferencia sin tools (ya tenemos el resultado)
+        prompt2   = _construir_prompt(mensajes_con_resultado, system, con_tools=False)
+        result2   = vlm_generate(model, processor, prompt2, max_tokens=max_tokens, verbose=False)
+        respuesta = result2.text.strip() if hasattr(result2, "text") else str(result2).strip()
+
+    return respuesta
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -284,17 +268,21 @@ def _detectar_tool_call(texto: str) -> Optional[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 class MotorInferencia:
     """
-    Wrappers de inferencia que usan los routers hijos.
-    - texto()  → inferencia de un solo turno (endpoints LUKA, uso interno)
-    - chat()   → inferencia multi-turno con tool_use (Claude Code, AnythingLLM)
-    - imagen() → inferencia con imagen adjunta (facturas LUKA)
-    - extraer_json() → extrae JSON de la respuesta del modelo
+    API pública de inferencia para los routers hijos.
+    - texto()  → un solo turno, sin tools (LUKA y proyectos similares).
+    - chat()   → multi-turno con tool calling nativo (chatbot, Claude Code).
+    - imagen() → inferencia con imagen (facturas LUKA).
+    - extraer_json() → extrae JSON de la respuesta del modelo.
     """
 
     @staticmethod
     def texto(prompt_usuario: str, max_tokens: int = MAX_TOKENS_LUKA) -> str:
-        """Inferencia de un solo turno. Úsalo desde los routers de proyecto (LUKA, etc.)."""
-        model, processor, config = _ModeloMLX.get()
+        """Inferencia de un solo turno sin tools. Para routers de proyecto (LUKA)."""
+        model, processor, _ = _ModeloMLX.get()
+        # Para LUKA usamos mlx_vlm directamente — no necesitamos tools
+        from mlx_vlm.prompt_utils import apply_chat_template
+        from mlx_vlm.utils import load_config
+        config = load_config(MODEL_PATH)
         prompt = apply_chat_template(
             processor, config, prompt_usuario,
             num_images=0,
@@ -305,17 +293,16 @@ class MotorInferencia:
 
     @staticmethod
     def chat(mensajes: list[dict], system: Any = None, max_tokens: int = MAX_TOKENS_CHAT) -> str:
-        """
-        Inferencia multi-turno con soporte de tool_use (web_search).
-        Úsalo desde los endpoints de chat (/v1/messages, /v1/chat/completions).
-        mensajes: lista de dicts con {"role": "user"|"assistant", "content": str|list}
-        """
+        """Inferencia multi-turno con tool calling nativo. Para /v1/messages y /v1/chat/completions."""
         return _inferir_chat(mensajes, system=system, max_tokens=max_tokens)
 
     @staticmethod
     def imagen(prompt_usuario: str, imagen_b64: str, max_tokens: int = MAX_TOKENS_LUKA) -> str:
-        """Inferencia con imagen adjunta. Para facturas de LUKA."""
-        model, processor, config = _ModeloMLX.get()
+        """Inferencia con imagen. Para facturas de LUKA."""
+        model, processor, _ = _ModeloMLX.get()
+        from mlx_vlm.prompt_utils import apply_chat_template
+        from mlx_vlm.utils import load_config
+        config   = load_config(MODEL_PATH)
         img_bytes = base64.b64decode(imagen_b64)
         tmp_path  = os.path.join(tempfile.gettempdir(), f"kr_img_{uuid.uuid4().hex}.jpg")
         try:
@@ -327,12 +314,7 @@ class MotorInferencia:
                 num_images=1,
                 enable_thinking=False,
             )
-            result = vlm_generate(
-                model, processor, prompt,
-                image=tmp_path,
-                max_tokens=max_tokens,
-                verbose=False,
-            )
+            result = vlm_generate(model, processor, prompt, image=tmp_path, max_tokens=max_tokens, verbose=False)
             return result.text.strip() if hasattr(result, "text") else str(result).strip()
         finally:
             if os.path.exists(tmp_path):
@@ -352,19 +334,13 @@ class MotorInferencia:
                     return json.loads(match.group())
                 except json.JSONDecodeError:
                     pass
-        raise ValueError(f"No se pudo extraer JSON válido del texto: {texto!r}")
+        raise ValueError(f"No se pudo extraer JSON válido: {texto!r}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Clase base para routers de proyecto
 # ─────────────────────────────────────────────────────────────────────────────
 class BaseRouter(ABC):
-    """
-    Clase base que deben extender los routers de proyecto.
-    Cada proyecto define su prefix y registra sus rutas en _registrar_rutas().
-    Recibe el MotorInferencia inyectado — nunca toca mlx_vlm directamente.
-    """
-
     prefix: str = "/proyecto"
 
     def __init__(self, motor: MotorInferencia) -> None:
@@ -374,49 +350,39 @@ class BaseRouter(ABC):
         logger.info("Router registrado: %s", self.prefix)
 
     @abstractmethod
-    def _registrar_rutas(self) -> None:
-        ...
+    def _registrar_rutas(self) -> None: ...
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Modelos Pydantic
 # ─────────────────────────────────────────────────────────────────────────────
-
-# OpenAI (/v1/chat/completions)
 class _OAIMensaje(BaseModel):
     role:    str
-    content: Any   # str o lista de bloques
+    content: Any
 
 class _OAIRequest(BaseModel):
-    model:       Optional[str]   = None
-    messages:    list[_OAIMensaje] = []
-    max_tokens:  Optional[int]   = None
-    temperature: Optional[float] = None
-    stream:      Optional[bool]  = False
+    model:       Optional[str]         = None
+    messages:    list[_OAIMensaje]     = []
+    max_tokens:  Optional[int]         = None
+    temperature: Optional[float]       = None
+    stream:      Optional[bool]        = False
 
-# Anthropic (/v1/messages)
 class _AnthropicMensaje(BaseModel):
     role:    str
-    content: Any   # str o lista de bloques
+    content: Any
 
 class _AnthropicRequest(BaseModel):
-    model:      Optional[str]               = None
-    messages:   list[_AnthropicMensaje]     = []
-    system:     Optional[Any]               = None   # str o lista de bloques (Claude Code manda lista)
-    max_tokens: Optional[int]               = None
-    stream:     Optional[bool]              = False
+    model:      Optional[str]              = None
+    messages:   list[_AnthropicMensaje]    = []
+    system:     Optional[Any]              = None
+    max_tokens: Optional[int]              = None
+    stream:     Optional[bool]             = False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Servidor principal
 # ─────────────────────────────────────────────────────────────────────────────
 class KingsrowAI:
-    """
-    Orquestador central.
-    - Carga el modelo de forma síncrona antes de que FastAPI arranque.
-    - Registra routers hijos vía registrar().
-    - Expone /v1/messages, /v1/chat/completions, /v1/models, /health.
-    """
 
     def __init__(self) -> None:
         self._motor:   MotorInferencia   = MotorInferencia()
@@ -429,7 +395,7 @@ class KingsrowAI:
         return self
 
     def build(self) -> FastAPI:
-        _ModeloMLX.cargar()   # síncrono, fuera del event loop
+        _ModeloMLX.cargar()
 
         @asynccontextmanager
         async def lifespan(app: FastAPI):
@@ -438,7 +404,7 @@ class KingsrowAI:
         app = FastAPI(
             title="Kingsrow AI",
             description="Motor de inferencia MLX compartido — Kingsrow Home Lab",
-            version="3.0.0",
+            version="3.1.0",
             lifespan=lifespan,
         )
 
@@ -457,7 +423,6 @@ class KingsrowAI:
                     return await call_next(request)
 
             app.add_middleware(_APIKeyMiddleware)
-            logger.info("Autenticación por API Key activada.")
 
         self._montar_endpoints_base(app)
         for r in self._routers:
@@ -471,12 +436,10 @@ class KingsrowAI:
         logger.info("Iniciando Kingsrow AI en http://%s:%d", HOST, PORT)
         uvicorn.run(app, host=HOST, port=PORT)
 
-    # ── Endpoints base ────────────────────────────────────────────────────────
     def _montar_endpoints_base(self, app: FastAPI) -> None:
         motor   = self._motor
         routers = self._routers
 
-        # ── /health ──────────────────────────────────────────────────────────
         @app.get("/health")
         def health():
             return {
@@ -488,17 +451,11 @@ class KingsrowAI:
                 "routers": [r.prefix for r in routers],
             }
 
-        # ── /v1/models ───────────────────────────────────────────────────────
         @app.get("/v1/models")
         def list_models():
             return {
                 "object": "list",
-                "data": [{
-                    "id":       MODEL_PATH,
-                    "object":   "model",
-                    "created":  0,
-                    "owned_by": "kingsrow",
-                }],
+                "data": [{"id": MODEL_PATH, "object": "model", "created": 0, "owned_by": "kingsrow"}],
             }
 
         # ── /v1/messages  (Anthropic — Claude Code) ──────────────────────────
@@ -534,13 +491,9 @@ class KingsrowAI:
                 return StreamingResponse(_sse(), media_type="text/event-stream")
 
             return {
-                "id":            msg_id,
-                "type":          "message",
-                "role":          "assistant",
-                "content":       [{"type": "text", "text": respuesta}],
-                "model":         model_name,
-                "stop_reason":   "end_turn",
-                "stop_sequence": None,
+                "id": msg_id, "type": "message", "role": "assistant",
+                "content": [{"type": "text", "text": respuesta}],
+                "model": model_name, "stop_reason": "end_turn", "stop_sequence": None,
                 "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
             }
 
@@ -550,7 +503,6 @@ class KingsrowAI:
             if not req.messages:
                 raise HTTPException(status_code=422, detail="'messages' no puede estar vacío.")
 
-            # Separar system del resto
             system  = None
             mensajes = []
             for m in req.messages:
@@ -582,18 +534,7 @@ class KingsrowAI:
                 return StreamingResponse(_sse(), media_type="text/event-stream")
 
             return {
-                "id":      cmpl_id,
-                "object":  "chat.completion",
-                "created": created,
-                "model":   model_name,
-                "choices": [{
-                    "index":         0,
-                    "message":       {"role": "assistant", "content": respuesta},
-                    "finish_reason": "stop",
-                }],
-                "usage": {
-                    "prompt_tokens":     prompt_tokens,
-                    "completion_tokens": comp_tokens,
-                    "total_tokens":      prompt_tokens + comp_tokens,
-                },
+                "id": cmpl_id, "object": "chat.completion", "created": created, "model": model_name,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": respuesta}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": comp_tokens, "total_tokens": prompt_tokens + comp_tokens},
             }
