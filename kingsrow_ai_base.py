@@ -319,11 +319,20 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
     # Fecha siempre disponible — el servidor la tiene, no hace falta buscarla
     fecha_actual = datetime.now().strftime("%A %d de %B de %Y, %H:%M")
 
-    # Extraer la última pregunta del usuario
+    # Extraer la última pregunta del usuario — solo si es texto plano, no tool_result
     ultima_pregunta = ""
     for m in reversed(mensajes):
         if m.get("role") == "user":
-            ultima_pregunta = _extraer_texto_content(m.get("content", ""))
+            content_raw = m.get("content", "")
+            # Si el último mensaje de usuario contiene tool_result, es output de herramienta
+            # no una pregunta humana — no clasificar para búsqueda
+            es_tool_result = (
+                isinstance(content_raw, list) and
+                any((b.get("type") if isinstance(b, dict) else getattr(b, "type", None)) == "tool_result"
+                    for b in content_raw)
+            )
+            if not es_tool_result:
+                ultima_pregunta = _extraer_texto_content(content_raw)
             break
 
     # Clasificar qué temas requieren búsqueda web
