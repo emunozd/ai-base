@@ -68,6 +68,9 @@ MAX_TOKENS_LUKA   = int(os.getenv("KR_MAX_TOKENS_LUKA",   "600"))
 
 # El clasificador solo necesita devolver JSON corto
 _MAX_TOKENS_CLASIFICADOR = 64
+# Máximo de tokens de contexto de entrada antes de truncar historial
+# Qwen3.5-35B-A3B-4bit empieza a degradarse por encima de ~20k tokens de entrada
+MAX_CTX_TOKENS = int(os.getenv("KR_MAX_CTX_TOKENS", "20000"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -305,6 +308,45 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Inferencia de chat con búsqueda web automática
 # ─────────────────────────────────────────────────────────────────────────────
+def _truncar_mensajes(mensajes: list[dict], max_tokens: int = MAX_CTX_TOKENS) -> list[dict]:
+    """
+    Trunca el historial de mensajes para que el contexto de entrada no supere max_tokens.
+    Estrategia:
+    - Siempre conserva el primer mensaje (instrucción original del usuario).
+    - Siempre conserva los últimos N mensajes (contexto inmediato).
+    - Elimina mensajes del medio si el total supera max_tokens.
+    Estimación: 1 token ≈ 4 chars (aproximación para Qwen).
+    """
+    if not mensajes:
+        return mensajes
+
+    def _contar(m):
+        return len(_extraer_texto_content(m.get("content", ""))) // 4
+
+    total = sum(_contar(m) for m in mensajes)
+    if total <= max_tokens:
+        return mensajes
+
+    # Siempre mantener el primero y los últimos 6 mensajes
+    cabeza = mensajes[:1]
+    cola   = mensajes[-6:] if len(mensajes) > 7 else mensajes[1:]
+    medio  = mensajes[1:-6] if len(mensajes) > 7 else []
+
+    # Eliminar del medio hasta que quepa
+    while medio:
+        total = sum(_contar(m) for m in cabeza + medio + cola)
+        if total <= max_tokens:
+            break
+        medio = medio[1:]  # eliminar el más antiguo del medio
+
+    resultado = cabeza + medio + cola
+    eliminados = len(mensajes) - len(resultado)
+    if eliminados > 0:
+        logger.info("Contexto truncado: %d → %d mensajes (%d eliminados del medio)",
+                    len(mensajes), len(resultado), eliminados)
+    return resultado
+
+
 def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MAX_TOKENS_CHAT) -> str:
     """
     Flujo:
@@ -318,6 +360,9 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
 
     # Fecha siempre disponible — el servidor la tiene, no hace falta buscarla
     fecha_actual = datetime.now().strftime("%A %d de %B de %Y, %H:%M")
+
+    # Truncar historial si el contexto es demasiado largo
+    mensajes = _truncar_mensajes(mensajes)
 
     # Extraer la última pregunta del usuario — solo si es texto plano, no tool_result
     ultima_pregunta = ""
