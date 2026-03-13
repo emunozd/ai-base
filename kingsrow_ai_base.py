@@ -331,6 +331,7 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
                 any((b.get("type") if isinstance(b, dict) else getattr(b, "type", None)) == "tool_result"
                     for b in content_raw)
             )
+            logger.info("ULTIMO_MSG role=%s es_tool_result=%s content_raw=%r", m.get("role"), es_tool_result, str(content_raw)[:200])
             if not es_tool_result:
                 ultima_pregunta = _extraer_texto_content(content_raw)
             break
