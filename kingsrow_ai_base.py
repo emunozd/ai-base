@@ -171,7 +171,8 @@ def _parsear_tool_calls(texto: str):
     tool_blocks  = []
     texto_limpio = texto
 
-    patron = _re.compile(r"<tool_call>(.*?)</tool_call>", _re.DOTALL)
+    # Soporta con y sin etiqueta de cierre, y multiples seguidos
+    patron = _re.compile(r"<tool_call>(.*?)(?:</tool_call>|(?=<tool_call>|$))", _re.DOTALL)
     for m in patron.finditer(texto):
         try:
             datos = json.loads(m.group(1).strip())
