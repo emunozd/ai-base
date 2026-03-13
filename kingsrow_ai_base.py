@@ -187,7 +187,10 @@ def _construir_prompt(mensajes: list[dict], system: Any = None, con_tools: bool 
         kwargs["tools"] = _TOOLS
 
     # Llamada directa al processor — no a mlx_vlm.prompt_utils
-    return processor.apply_chat_template(msgs, **kwargs)
+    #return processor.apply_chat_template(msgs, **kwargs)
+    prompt = processor.apply_chat_template(msgs, **kwargs)
+    logger.info("PROMPT GENERADO (primeros 800 chars):\n%s", prompt[:800])
+    return prompt
 
 
 def _parsear_tool_call(texto: str) -> Optional[dict]:
