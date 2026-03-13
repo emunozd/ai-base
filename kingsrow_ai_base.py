@@ -175,7 +175,7 @@ def _clasificar_busqueda(pregunta: str) -> Optional[str]:
     Por qué funciona: el modelo es muy confiable siguiendo instrucciones de
     JSON simple en un solo turno — mucho más que emitir tool_calls espontáneos.
     """
-    model, processor, config = _ModeloMLX.get()
+    model, processor, _ = _ModeloMLX.get()
 
     system_prompt = (
         'Eres un clasificador. Responde ÚNICAMENTE con JSON válido, sin texto adicional, '
@@ -188,13 +188,14 @@ def _clasificar_busqueda(pregunta: str) -> Optional[str]:
         'conceptos, o cualquier cosa que no dependa de datos recientes.'
     )
 
-    prompt = vlm_apply_chat_template(
-        processor,
-        config,
-        pregunta,
-        num_images=0,
+    prompt = processor.apply_chat_template(
+        [
+            {"role": "system",  "content": system_prompt},
+            {"role": "user",    "content": pregunta},
+        ],
+        tokenize=False,
+        add_generation_prompt=True,
         enable_thinking=False,
-        system_prompt=system_prompt,
     )
 
     result    = vlm_generate(model, processor, prompt, max_tokens=_MAX_TOKENS_CLASIFICADOR, verbose=False)
