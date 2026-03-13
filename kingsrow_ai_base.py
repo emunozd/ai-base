@@ -158,6 +158,32 @@ def _construir_prompt(mensajes: list[dict], system: Any = None) -> str:
 # Búsqueda web — DuckDuckGo, sin API key
 # pip install duckduckgo-search --break-system-packages
 # ─────────────────────────────────────────────────────────────────────────────
+def _parsear_tool_calls(texto: str):
+    """
+    Qwen emite tool calls como texto plano con etiquetas XML.
+    Parsea y devuelve (tool_blocks, texto_limpio).
+    Soporta: <tool_call>{json}</tool_call>
+    """
+    import re as _re
+    tool_blocks  = []
+    texto_limpio = texto
+
+    patron = _re.compile(r"<tool_call>(.*?)</tool_call>", _re.DOTALL)
+    for m in patron.finditer(texto):
+        try:
+            datos = json.loads(m.group(1).strip())
+            tool_blocks.append({
+                "type":  "tool_use",
+                "id":    "toolu_" + uuid.uuid4().hex[:16],
+                "name":  datos.get("name", "unknown"),
+                "input": datos.get("input", datos.get("parameters", datos.get("arguments", {}))),
+            })
+        except Exception:
+            pass
+    texto_limpio = patron.sub("", texto_limpio).strip()
+    return tool_blocks, texto_limpio
+
+
 def _url_es_antigua(url: str) -> bool:
     """Detecta URLs con años anteriores a 2025 en el path."""
     match = re.search(r'/(20\d{2})/', url)
@@ -173,7 +199,7 @@ def _fetch_url(url: str, max_chars: int = 3000) -> Optional[str]:
     Devuelve texto plano truncado o None si falla.
     """
     if _url_es_antigua(url):
-        #logger.warning("fetch_url omitida (URL antigua): %s", url)
+        # logger.warning("fetch_url omitida (URL antigua): %s", url)
         return None
     try:
         import httpx
@@ -181,7 +207,7 @@ def _fetch_url(url: str, max_chars: int = 3000) -> Optional[str]:
         headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
         r = httpx.get(url, headers=headers, timeout=8, follow_redirects=True)
         if r.status_code >= 400:
-            #logger.warning("fetch_url rechazada HTTP %d: %s", r.status_code, url)
+            # logger.warning("fetch_url rechazada HTTP %d: %s", r.status_code, url)
             return None
         soup = BeautifulSoup(r.text, "html.parser")
         for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
@@ -218,7 +244,7 @@ def _web_search(query: str, max_results: int = 5) -> Optional[str]:
         for titulo, url, snippet in urls[:3]:
             contenido = _fetch_url(url)
             if contenido:
-                #logger.info("Fetch exitoso: %s", url)
+                # logger.info("Fetch exitoso: %s", url)
                 return f"Fuente: {titulo} ({url})\n\n{contenido}"
 
         # Fallback a snippets si el fetch falla para todas
@@ -269,8 +295,7 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
     try:
         datos   = json.loads(respuesta)
         queries = [q.strip() for q in datos.get("queries", []) if q.strip()]
-        if queries:
-            logger.info("Clasificador: queries → %s", queries)
+        # logger.info("Clasificador: queries → %s", queries)
         return queries
     except (json.JSONDecodeError, AttributeError):
         logger.warning("Clasificador no devolvió JSON válido: %r", respuesta[:100])
@@ -309,10 +334,9 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
     for query in queries:
         resultado = _web_search(query)
         if resultado:
-            #logger.info("Búsqueda OK para %r (%d chars)", query, len(resultado))
+            # logger.info("Búsqueda OK para %r (%d chars)", query, len(resultado))
             bloques_web.append(f"Búsqueda: '{query}'\n{resultado}")
-        else:
-            logger.warning("Sin resultados para %r", query)
+        # else: sin resultados para query
 
     # Armar system prompt: system original + fecha + datos web
     system_texto = _extraer_texto_content(system) if system else ""
@@ -526,7 +550,7 @@ class KingsrowAI:
 
             mensajes   = [{"role": m.role, "content": m.content} for m in req.messages]
             max_tok    = req.max_tokens or MAX_TOKENS_CHAT
-            msg_id     = f"msg_{uuid.uuid4().hex}"
+            msg_id     = "msg_" + uuid.uuid4().hex
             created    = int(time.time())
             model_name = req.model or MODEL_PATH
 
@@ -539,24 +563,59 @@ class KingsrowAI:
             input_tokens  = sum(len(_extraer_texto_content(m.content).split()) for m in req.messages)
             output_tokens = len(respuesta.split())
 
+            # Detectar si el modelo emitió tool_use en texto plano y parsearlo
+            # Claude Code espera stop_reason="tool_use" + content block tipo tool_use
+            tool_blocks, texto_limpio = _parsear_tool_calls(respuesta)
+            tiene_tools = len(tool_blocks) > 0
+            stop_reason = "tool_use" if tiene_tools else "end_turn"
+
+            # Armar content blocks
+            content_blocks = []
+            if texto_limpio.strip():
+                content_blocks.append({"type": "text", "text": texto_limpio})
+            content_blocks.extend(tool_blocks)
+
             if req.stream:
                 def _sse() -> Generator[str, None, None]:
-                    yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': msg_id, 'type': 'message', 'role': 'assistant', 'content': [], 'model': model_name, 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': input_tokens, 'output_tokens': 0}}})}\n\n"
-                    yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
-                    yield f"event: ping\ndata: {json.dumps({'type': 'ping'})}\n\n"
-                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': respuesta}})}\n\n"
-                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
-                    yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': output_tokens}})}\n\n"
-                    yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+                    yield "event: message_start\ndata: " + json.dumps({
+                        "type": "message_start",
+                        "message": {"id": msg_id, "type": "message", "role": "assistant",
+                                    "content": [], "model": model_name,
+                                    "stop_reason": None, "stop_sequence": None,
+                                    "usage": {"input_tokens": input_tokens, "output_tokens": 0}}
+                    }) + "\n\n"
+                    yield "event: ping\ndata: " + json.dumps({"type": "ping"}) + "\n\n"
+                    for i, block in enumerate(content_blocks):
+                        yield "event: content_block_start\ndata: " + json.dumps({
+                            "type": "content_block_start", "index": i, "content_block": block
+                        }) + "\n\n"
+                        if block["type"] == "text":
+                            yield "event: content_block_delta\ndata: " + json.dumps({
+                                "type": "content_block_delta", "index": i,
+                                "delta": {"type": "text_delta", "text": block["text"]}
+                            }) + "\n\n"
+                        elif block["type"] == "tool_use":
+                            yield "event: content_block_delta\ndata: " + json.dumps({
+                                "type": "content_block_delta", "index": i,
+                                "delta": {"type": "input_json_delta", "partial_json": json.dumps(block.get("input", {}))}
+                            }) + "\n\n"
+                        yield "event: content_block_stop\ndata: " + json.dumps({
+                            "type": "content_block_stop", "index": i
+                        }) + "\n\n"
+                    yield "event: message_delta\ndata: " + json.dumps({
+                        "type": "message_delta",
+                        "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                        "usage": {"output_tokens": output_tokens}
+                    }) + "\n\n"
+                    yield "event: message_stop\ndata: " + json.dumps({"type": "message_stop"}) + "\n\n"
                 return StreamingResponse(_sse(), media_type="text/event-stream")
 
             return {
                 "id": msg_id, "type": "message", "role": "assistant",
-                "content": [{"type": "text", "text": respuesta}],
-                "model": model_name, "stop_reason": "end_turn", "stop_sequence": None,
+                "content": content_blocks,
+                "model": model_name, "stop_reason": stop_reason, "stop_sequence": None,
                 "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
             }
-
         # ── /v1/chat/completions  (OpenAI — AnythingLLM) ─────────────────────
         @app.post("/v1/chat/completions")
         def chat_completions(req: _OAIRequest):
