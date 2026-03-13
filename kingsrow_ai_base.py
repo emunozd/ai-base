@@ -209,28 +209,75 @@ def _parsear_tool_calls(texto: str):
     # Soporta con y sin etiqueta de cierre, y multiples seguidos
     patron = _re.compile(r"<tool_call>(.*?)(?:</tool_call>|(?=<tool_call>|$))", _re.DOTALL)
     for m in patron.finditer(texto):
+        raw = m.group(1).strip()
+        if not raw:
+            continue
         try:
-            datos = json.loads(m.group(1).strip())
-            nombre = datos.get("name", "unknown")
-            # Qwen puede poner los params en input/parameters/arguments
-            # o directamente en el root junto a "name"
-            if "input" in datos:
-                inp = datos["input"]
-            elif "parameters" in datos:
+            datos = json.loads(raw)
+        except Exception:
+            # JSON malformado — intentar reparar truncando desde el último campo completo
+            try:
+                import re as _re2
+                # Extraer name manualmente
+                nm = _re2.search(r'"name"\s*:\s*"([^"]+)"', raw)
+                if not nm:
+                    continue
+                nombre = nm.group(1)
+                # Extraer file_path si existe
+                fp = _re2.search(r'"file_path"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+                # Extraer content si existe (puede ser muy largo, tomar todo lo que haya)
+                ct = _re2.search(r'"content"\s*:\s*"(.*)', raw, _re2.DOTALL)
+                inp = {}
+                if fp:
+                    inp["file_path"] = fp.group(1).replace("\\\\", "\\")
+                if ct:
+                    # Limpiar el content: puede estar truncado
+                    ct_val = ct.group(1)
+                    # Decodificar escapes básicos
+                    ct_val = ct_val.replace("\\n", "\n").replace("\\t", "\t").replace('\\\\"'  , '"')
+                    inp["content"] = ct_val
+                # input como string = es el file_path directo
+                ip_str = _re2.search(r'"input"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+                if ip_str and "file_path" not in inp:
+                    inp["file_path"] = ip_str.group(1).replace("\\\\", "\\").strip()
+                tool_blocks.append({
+                    "type":  "tool_use",
+                    "id":    "toolu_" + uuid.uuid4().hex[:16],
+                    "name":  nombre,
+                    "input": inp,
+                })
+                logger.info("_parsear_tool_calls reparado: %s %s", nombre, list(inp.keys()))
+                continue
+            except Exception as e2:
+                logger.warning("_parsear_tool_calls irreparable: %s", e2)
+                continue
+
+        nombre = datos.get("name", "unknown")
+        # input puede ser: dict, string (=file_path), o ausente (params en root)
+        raw_inp = datos.get("input", None)
+        if isinstance(raw_inp, dict):
+            inp = raw_inp
+        elif isinstance(raw_inp, str):
+            # input es string = file_path directo
+            inp = {"file_path": raw_inp.strip()}
+            # content puede estar en el root
+            if "content" in datos:
+                inp["content"] = datos["content"]
+        elif raw_inp is None:
+            if "parameters" in datos:
                 inp = datos["parameters"]
             elif "arguments" in datos:
                 inp = datos["arguments"]
             else:
-                # params en el root: todo excepto "name"
                 inp = {k: v for k, v in datos.items() if k != "name"}
-            tool_blocks.append({
-                "type":  "tool_use",
-                "id":    "toolu_" + uuid.uuid4().hex[:16],
-                "name":  nombre,
-                "input": inp,
-            })
-        except Exception as e:
-            logger.warning("_parsear_tool_calls falló: %s", e)
+        else:
+            inp = {}
+        tool_blocks.append({
+            "type":  "tool_use",
+            "id":    "toolu_" + uuid.uuid4().hex[:16],
+            "name":  nombre,
+            "input": inp,
+        })
     texto_limpio = patron.sub("", texto_limpio).strip()
     return tool_blocks, texto_limpio
 
