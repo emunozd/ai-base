@@ -155,7 +155,7 @@ def _extraer_texto_content(content: Any) -> str:
     return str(content)
 
 
-def _construir_prompt(mensajes: list[dict], system: Any = None, con_tools: bool = True) -> str:
+def _construir_prompt(mensajes: list[dict], system: Any = None, con_tools: bool = True, forzar_tool: bool = False) -> str:
     """
     Construye el prompt usando processor.apply_chat_template() directamente.
     Esto es crítico: mlx_vlm.prompt_utils.apply_chat_template descarta las tools
@@ -185,6 +185,11 @@ def _construir_prompt(mensajes: list[dict], system: Any = None, con_tools: bool 
     }
     if con_tools:
         kwargs["tools"] = _TOOLS
+        if forzar_tool:
+            kwargs["tool_choice"] = {
+                "type": "function",
+                "function": {"name": "web_search"}
+            }
 
     # Llamada directa al processor — no a mlx_vlm.prompt_utils
     #return processor.apply_chat_template(msgs, **kwargs)
@@ -232,7 +237,7 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
     """
     model, processor, _ = _ModeloMLX.get()
 
-    prompt  = _construir_prompt(mensajes, system, con_tools=True)
+    prompt  = _construir_prompt(mensajes, system, con_tools=True, forzar_tool=True)
     result  = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False)
     respuesta = result.text.strip() if hasattr(result, "text") else str(result).strip()
     logger.info("Primera inferencia (primeros 300 chars): %r", respuesta[:300])
@@ -241,7 +246,7 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
 
     if tool_call and tool_call.get("name") == "web_search":
         query = tool_call["arguments"].get("query", "")
-        logger.info("Tool call detectado: web_search(query=%r)", query)
+        logger.info("Tool call: web_search(query=%r)", query)
 
         resultado_busqueda = _web_search(query)
         logger.info("Búsqueda completada, %d chars de resultado", len(resultado_busqueda))
@@ -262,7 +267,10 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
         prompt2   = _construir_prompt(mensajes_con_resultado, system, con_tools=False)
         result2   = vlm_generate(model, processor, prompt2, max_tokens=max_tokens, verbose=False)
         respuesta = result2.text.strip() if hasattr(result2, "text") else str(result2).strip()
-
+    else:
+        # El modelo no usó la tool — respuesta directa sin búsqueda
+        logger.info("Modelo respondió sin tool call.")
+        
     return respuesta
 
 
