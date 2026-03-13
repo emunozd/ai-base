@@ -149,16 +149,18 @@ def _web_search(query: str, max_results: int = 5) -> Optional[str]:
     """
     Devuelve los resultados como string, o None si no hay internet o falla la búsqueda.
     Nunca lanza excepción — el caller decide qué hacer con None.
+    Requiere: pip install ddgs --break-system-packages
     """
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
     except ImportError:
-        logger.warning("duckduckgo-search no instalado. Ejecuta: pip install duckduckgo-search --break-system-packages")
+        logger.warning("ddgs no instalado. Ejecuta: pip install ddgs --break-system-packages")
         return None
     try:
         resultados = []
-        with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=max_results):
+        with DDGS() as client:
+            # region="wt-wt" = worldwide, sin filtro geográfico — mejores resultados en inglés
+            for r in client.text(query, max_results=max_results, region="wt-wt"):
                 resultados.append(f"- {r['title']}: {r['body']} ({r['href']})")
         return "\n".join(resultados) if resultados else None
     except Exception as e:
@@ -185,7 +187,8 @@ def _clasificar_busqueda(pregunta: str) -> Optional[str]:
         'que no está en tu entrenamiento: precios en tiempo real, noticias recientes, '
         'eventos actuales, datos posteriores a 2024. '
         'Responde buscar=false para conocimiento general, matemáticas, código, historia, '
-        'conceptos, o cualquier cosa que no dependa de datos recientes.'
+        'conceptos, o cualquier cosa que no dependa de datos recientes. '
+        'IMPORTANTE: el campo "query" debe estar siempre en inglés para obtener mejores resultados de búsqueda.'
     )
 
     prompt = processor.apply_chat_template(
