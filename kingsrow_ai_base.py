@@ -70,7 +70,7 @@ MAX_TOKENS_LUKA   = int(os.getenv("KR_MAX_TOKENS_LUKA",   "600"))
 _MAX_TOKENS_CLASIFICADOR = 64
 # Máximo de tokens de contexto de entrada antes de truncar historial
 # Qwen3.5-35B-A3B-4bit empieza a degradarse por encima de ~20k tokens de entrada
-MAX_CTX_TOKENS = int(os.getenv("KR_MAX_CTX_TOKENS", "30000"))
+MAX_CTX_TOKENS = int(os.getenv("KR_MAX_CTX_TOKENS", "25000"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
