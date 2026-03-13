@@ -70,7 +70,7 @@ MAX_TOKENS_LUKA   = int(os.getenv("KR_MAX_TOKENS_LUKA",   "600"))
 _MAX_TOKENS_CLASIFICADOR = 64
 # Máximo de tokens de contexto de entrada antes de truncar historial
 # Qwen3.5-35B-A3B-4bit empieza a degradarse por encima de ~20k tokens de entrada
-MAX_CTX_TOKENS = int(os.getenv("KR_MAX_CTX_TOKENS", "20000"))
+MAX_CTX_TOKENS = int(os.getenv("KR_MAX_CTX_TOKENS", "30000"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -639,7 +639,9 @@ class KingsrowAI:
 
             # Detectar si el modelo emitió tool_use en texto plano y parsearlo
             # Claude Code espera stop_reason="tool_use" + content block tipo tool_use
+            logger.info("RAW_RESPONSE (primeros 500 chars): %r", respuesta[:500])
             tool_blocks, texto_limpio = _parsear_tool_calls(respuesta)
+            logger.info("TOOL_BLOCKS encontrados: %d → %s", len(tool_blocks), [b.get("name") for b in tool_blocks])
             tiene_tools = len(tool_blocks) > 0
             stop_reason = "tool_use" if tiene_tools else "end_turn"
 
