@@ -280,8 +280,7 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
     if query_busqueda:
         resultado_busqueda = _web_search(query_busqueda)
         if resultado_busqueda:
-            logger.info("Búsqueda completada (%d chars):
-%s", len(resultado_busqueda), resultado_busqueda)
+            logger.info("Búsqueda completada (%d chars): %s", len(resultado_busqueda), resultado_busqueda)
             # Inyectar en system prompt — el modelo lo trata como verdad autoritativa
             # y no como conversación que puede ignorar.
             system_texto = _extraer_texto_content(system) if system else ""
