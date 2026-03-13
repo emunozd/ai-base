@@ -245,20 +245,19 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
         resultado_busqueda = _web_search(query_busqueda)
         if resultado_busqueda:
             logger.info("Búsqueda completada (%d chars)", len(resultado_busqueda))
-            mensajes_con_contexto = list(mensajes) + [
-                {
-                    "role": "user",
-                    "content": (
-                        f"[Información actualizada de internet]\n"
-                        f"Búsqueda realizada: '{query_busqueda}'\n\n"
-                        f"{resultado_busqueda}\n\n"
-                        "Usa esta información para responder la pregunta anterior de forma completa."
-                    ),
-                }
-            ]
-            prompt = _construir_prompt(mensajes_con_contexto, system)
+            # Inyectar en system prompt — el modelo lo trata como verdad autoritativa
+            # y no como conversación que puede ignorar.
+            system_texto = _extraer_texto_content(system) if system else ""
+            system_con_contexto = (
+                (system_texto.strip() + "\n\n") if system_texto.strip() else ""
+            ) + (
+                f"CONTEXTO ACTUALIZADO DE INTERNET (usa esta información para responder, "
+                f"es más confiable que tu conocimiento de entrenamiento):\n"
+                f"Búsqueda realizada: '{query_busqueda}'\n\n"
+                f"{resultado_busqueda}"
+            )
+            prompt = _construir_prompt(mensajes, system=system_con_contexto)
         else:
-            # Sin internet o sin resultados — inferencia directa sin contexto web
             logger.warning("Búsqueda falló o sin resultados, respondiendo con conocimiento propio.")
             prompt = _construir_prompt(mensajes, system)
     else:
