@@ -10,7 +10,7 @@ Arranque manual:
 
 Variables de entorno disponibles (todas opcionales):
     KR_MODEL_PATH   ruta/nombre del modelo MLX  (default: mlx-community/Qwen3.5-35B-A3B-4bit)
-    KR_HOST         IP de escucha               (default: 192.168.0.90)
+    KR_HOST         IP de escucha               (default: 0.0.0.0)
     KR_PORT         puerto                      (default: 8181)
     KR_IMG_MAX      tamaño máximo de imagen px  (default: 1024)
     KR_API_KEY      API key requerida en header  X-API-Key (default: vacío = sin auth)
