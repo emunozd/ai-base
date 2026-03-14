@@ -350,11 +350,22 @@ def _fetch_url(url: str, max_chars: int = WEB_FETCH_MAX_CHARS) -> Optional[str]:
 
 def _web_search(query: str, max_results: int = WEB_SEARCH_MAX_RESULTS) -> Optional[str]:
     """
-    1. Busca con ddgs para obtener URLs relevantes.
-    2. Hace fetch del contenido real de la primera URL que responda.
-    Si el fetch falla para todas, usa los snippets como fallback.
-    Requiere: pip install ddgs httpx beautifulsoup4 --break-system-packages
+    Si query es una URL, hace fetch directo de esa página.
+    Si es texto, busca con ddgs y hace fetch de la primera URL que responda.
     """
+    # Fetch directo si la query es una URL
+    if re.match(r'https?://', query.strip()):
+        contenido = _fetch_url(query.strip())
+        if contenido:
+            return "Contenido de " + query.strip() + ":\n\n" + contenido
+        # Fetch falló — decirle al modelo que no invente
+        return (
+            "AVISO: No fue posible recuperar el contenido de " + query.strip() + " "
+            "(error de acceso, página no disponible o bloqueada). "
+            "NO inventes ni supongas el contenido de ese enlace. "
+            "Informa al usuario que no pudiste acceder al artículo y sugiere que lo abra directamente."
+        )
+
     try:
         from ddgs import DDGS
     except ImportError:
@@ -389,9 +400,17 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
     """
     Inferencia ligera sobre la última pregunta del usuario.
     Devuelve lista de queries a buscar (una por tema), o [] si no hace falta.
-    Nunca incluye queries para fecha/hora — eso lo provee el servidor.
-    Queries siempre en inglés.
+    - Si el mensaje contiene una URL, la retorna directamente para fetch — sin inferencia.
+    - Nunca incluye queries para fecha/hora — eso lo provee el servidor.
+    - Queries siempre en inglés.
     """
+    # Detección inmediata de URLs — fetch directo sin gastar tokens del clasificador
+    _URL_PAT = re.compile(r"https?://\S+")
+    urls = _URL_PAT.findall(pregunta)
+    if urls:
+        logger.info("URL detectada en pregunta, fetch directo: %s", urls[0])
+        return [urls[0]]
+
     model, processor, _ = _ModeloMLX.get()
 
     system_prompt = (
