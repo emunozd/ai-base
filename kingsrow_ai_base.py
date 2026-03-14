@@ -408,7 +408,7 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
     _URL_PAT = re.compile(r"https?://\S+")
     urls = _URL_PAT.findall(pregunta)
     if urls:
-        logger.info("URL detectada en pregunta, fetch directo: %s", urls[0])
+        #logger.info("URL detectada en pregunta, fetch directo: %s", urls[0])
         return [urls[0]]
 
     model, processor, _ = _ModeloMLX.get()
