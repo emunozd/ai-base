@@ -342,7 +342,23 @@ def _fetch_url(url: str, max_chars: int = WEB_FETCH_MAX_CHARS) -> Optional[str]:
         for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
             tag.decompose()
         texto = " ".join(soup.get_text(separator=" ").split())
-        return texto[:max_chars] if texto.strip() else None
+        if not texto.strip():
+            return None
+        # Detectar paywall / bloqueo — contenido demasiado corto o señales conocidas
+        _PAYWALL_SIGNALS = [
+            "subscribe", "subscription", "sign in to read", "paywall",
+            "powered and protected by", "access denied", "enable javascript",
+            "please enable cookies", "just a moment", "checking your browser",
+        ]
+        texto_lower = texto.lower()
+        es_bloqueado = (
+            len(texto) < 300 or
+            any(s in texto_lower for s in _PAYWALL_SIGNALS)
+        )
+        if es_bloqueado:
+            logger.warning("fetch_url: contenido bloqueado o paywall: %s", url)
+            return None
+        return texto[:max_chars]
     except Exception as e:
         logger.warning("fetch_url falló (%s): %s", url, e)
         return None
