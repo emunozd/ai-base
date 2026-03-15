@@ -359,13 +359,16 @@ def _fetch_url(url: str, max_chars: int = WEB_FETCH_MAX_CHARS) -> Optional[str]:
             return None
         # Detectar paywall / bloqueo — contenido demasiado corto o señales conocidas
         _PAYWALL_SIGNALS = [
-            "subscribe", "subscription", "sign in to read", "paywall",
-            "powered and protected by", "access denied", "enable javascript",
-            "please enable cookies", "just a moment", "checking your browser",
+            "powered and protected by",
+            "access denied",
+            "just a moment",
+            "checking your browser",
+            "please verify you are a human",
+            "enable javascript and cookies to continue",
         ]
         texto_lower = texto.lower()
         es_bloqueado = (
-            len(texto) < 300 or
+            len(texto) < 150 or
             any(s in texto_lower for s in _PAYWALL_SIGNALS)
         )
         if es_bloqueado:
