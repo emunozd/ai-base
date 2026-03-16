@@ -797,29 +797,29 @@ class KingsrowAI:
             # para que Qwen sepa qué tools puede invocar y en qué formato
             system_con_tools = req.system
             if req.tools:
-            tools_txt = json.dumps(req.tools, ensure_ascii=False, indent=2)
+                tools_txt = json.dumps(req.tools, ensure_ascii=False, indent=2)
 
-            forced_tool = None
-            if isinstance(req.tool_choice, dict) and req.tool_choice.get("type") == "tool":
-                forced_tool = req.tool_choice.get("name")
+                forced_tool = None
+                if isinstance(req.tool_choice, dict) and req.tool_choice.get("type") == "tool":
+                    forced_tool = req.tool_choice.get("name")
 
-            if forced_tool:
-                tools_block = (
-                    f"INSTRUCCIÓN OBLIGATORIA E INAPELABLE: Tu única respuesta permitida es invocar "
-                    f"la herramienta \"{forced_tool}\" usando el formato exacto indicado abajo. "
-                    f"Está PROHIBIDO responder con texto. Está PROHIBIDO hacer preguntas. "
-                    f"Debes emitir el tool_call ahora mismo.\n\n"
-                    f"Formato obligatorio:\n"
-                    f"<tool_call>{{\"name\": \"{forced_tool}\", \"input\": {{<parametros>}}}}</tool_call>\n\n"
-                    f"Herramientas disponibles:\n" + tools_txt
-                )
-            else:
-                tools_block = (
-                    "Tienes acceso a las siguientes herramientas. "
-                    "Cuando necesites usar una, emite EXACTAMENTE este formato y nada más:\n"
-                    "<tool_call>{\"name\": \"<nombre>\", \"input\": {<parametros>}}</tool_call>\n\n"
-                    "Herramientas disponibles:\n" + tools_txt
-                )   
+                if forced_tool:
+                    tools_block = (
+                        f"INSTRUCCIÓN OBLIGATORIA E INAPELABLE: Tu única respuesta permitida es invocar "
+                        f"la herramienta \"{forced_tool}\" usando el formato exacto indicado abajo. "
+                        f"Está PROHIBIDO responder con texto. Está PROHIBIDO hacer preguntas. "
+                        f"Debes emitir el tool_call ahora mismo.\n\n"
+                        f"Formato obligatorio:\n"
+                        f"<tool_call>{{\"name\": \"{forced_tool}\", \"input\": {{<parametros>}}}}</tool_call>\n\n"
+                        f"Herramientas disponibles:\n" + tools_txt
+                    )
+                else:
+                    tools_block = (
+                        "Tienes acceso a las siguientes herramientas. "
+                        "Cuando necesites usar una, emite EXACTAMENTE este formato y nada más:\n"
+                        "<tool_call>{\"name\": \"<nombre>\", \"input\": {<parametros>}}</tool_call>\n\n"
+                        "Herramientas disponibles:\n" + tools_txt
+                    )
                 if isinstance(system_con_tools, str) and system_con_tools.strip():
                     system_con_tools = system_con_tools + "\n\n" + tools_block
                 elif isinstance(system_con_tools, list):
