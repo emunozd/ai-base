@@ -46,7 +46,7 @@ REGLAS:
 - ANTOJO: comida por placer, restaurantes, domicilios, dulces, snacks.
 - HOGAR: arriendo, servicios públicos, reparaciones, muebles.
 - MEDICAMENTOS: farmacia, consultas médicas, parafarmacia.
-- OCIO: streaming, entretenimiento, deportes, viajes.
+- OCIO: streaming, entretenimiento, deportes, viajes, videojuegos.
 - TRANSPORTE: gasolina, taxi, bus, peajes, Uber.
 - TECNOLOGÍA: celulares, computadores, software, internet.
 - ROPA: ropa, calzado, accesorios de vestir.
