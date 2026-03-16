@@ -82,7 +82,7 @@ REGLAS PARA LA CATEGORÍA:
 - MASCOTAS: comida para perro/gato, veterinario, accesorios de mascotas.
 - HOGAR: servicios públicos, arriendo, reparaciones.
 - MEDICAMENTOS: drogas, farmacia, consulta médica.
-- OCIO: entretenimiento, streaming, deporte.
+- OCIO: entretenimiento, streaming, deporte, videojuegos.
 - TRANSPORTE: bus, taxi, Uber, gasolina, peaje.
 - TECNOLOGÍA: celular, computador, internet, software.
 - ROPA: ropa, zapatos, accesorios de vestir.
