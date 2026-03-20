@@ -364,7 +364,6 @@ def _fetch_url(url: str, max_chars: int = WEB_FETCH_MAX_CHARS) -> Optional[str]:
             "just a moment",
             "checking your browser",
             "please verify you are a human",
-            "enable javascript and cookies to continue",
         ]
         texto_lower = texto.lower()
         es_bloqueado = (
