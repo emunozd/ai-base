@@ -44,7 +44,7 @@ python main.py
 | Variable | Default | Descripción |
 |----------|---------|-------------|
 | `KR_MODEL_PATH` | `mlx-community/Qwen3.5-35B-A3B-4bit` | Ruta del modelo MLX |
-| `KR_HOST` | `192.168.0.90` | IP de escucha |
+| `KR_HOST` | `127.0.0.1` | IP de escucha |
 | `KR_PORT` | `8181` | Puerto |
 | `KR_IMG_MAX` | `1024` | Tamaño máximo de imagen en píxeles |
 | `KR_API_KEY` | `` | API key requerida en header `X-API-Key` |
@@ -83,17 +83,17 @@ HOGAR, CANASTA, MEDICAMENTOS, OCIO, ANTOJO, TRANSPORTE, TECNOLOGÍA, ROPA, EDUCA
 
 ```bash
 # Clasificar factura por texto
-curl -X POST http://192.168.0.90:8181/luka/categorizar-factura-texto \\
+curl -X POST http://KR_HOST:KR_PORT/luka/categorizar-factura-texto \\
   -H \"Content-Type: application/json\" \\
   -d '{\"texto\": \"Compre 2 panes a 2000 cada uno\"}'
 
 # Clasificar factura por imagen
-curl -X POST http://192.168.0.90:8181/luka/categorizar-factura-imagen \\
+curl -X POST http://KR_HOST:KR_PORT/luka/categorizar-factura-imagen \\
   -H \"Content-Type: application/json\" \\
   -d '{\"imagen_b64\": \"base64...\"}'
 
 # Clasificar gasto manual
-curl -X POST http://192.168.0.90:8181/luka/categorizar-gasto-manual \\
+curl -X POST http://KR_HOST:KR_PORT/luka/categorizar-gasto-manual \\
   -H \"Content-Type: application/json\" \\
   -d '{\"descripcion\": \"Gasté 5k en el supermercado\"}'
 ```
