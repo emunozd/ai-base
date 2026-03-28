@@ -199,6 +199,7 @@ def _construir_prompt(mensajes: list[dict], system: Any = None) -> str:
     el loop de herramientas y pueda continuar correctamente.
     """
     _, processor, _ = _ModeloMLX.get()
+    tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
 
     msgs = []
     if system:
@@ -457,7 +458,8 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
         '(tasas, salarios, estadísticas, precios históricos).'
     )
 
-    prompt = processor.apply_chat_template(
+    tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
+    prompt = tokenizer.apply_chat_template(
         [
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": pregunta},
