@@ -1,236 +1,249 @@
 """
-luka_ai_router.py — Router de inferencia IA para LUKA
+kalo_ai_router.py — Router de inferencia IA para KALO
 ======================================================
-Clase hija de BaseRouter que define los tres endpoints de LUKA:
-  POST /luka/categorizar-factura-texto
-  POST /luka/categorizar-factura-imagen
-  POST /luka/categorizar-gasto-manual
+Clase hija de BaseRouter que define los endpoints de KALO:
+  POST /kalo/analizar-foto-comida     — estima calorías desde una imagen
+  POST /kalo/interpretar-texto        — interpreta texto libre del usuario
+  POST /kalo/sugerencia-nutricional   — consejo según el balance del día
 
 Este archivo NO es el punto de entrada del servidor.
 El servidor se levanta desde main.py — ese es el único LaunchDaemon.
 
-Para agregar otro proyecto en el futuro:
-    1. Crea otro_proyecto_router.py con una clase que extienda BaseRouter.
-    2. Importa y registra esa clase en main.py.
-    3. Sus endpoints quedan bajo /otro-proyecto/...
+Para registrar en main.py:
+    from kalo_ai_router import KaloRouter
+    KaloRouter(motor, app)
 """
-from typing import Any
 
 from fastapi import HTTPException
 from pydantic import BaseModel
 
 from kingsrow_ai_base import BaseRouter, KingsrowAI, MotorInferencia
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Constantes LUKA
-# ─────────────────────────────────────────────────────────────────────────────
-CATEGORIAS_VALIDAS = {
-    "HOGAR", "CANASTA", "MEDICAMENTOS", "OCIO", "ANTOJO",
-    "TRANSPORTE", "TECNOLOGÍA", "ROPA", "EDUCACIÓN", "MASCOTAS",
-}
 
-SYSTEM_PROMPT = (
-    "Eres LUKA, el motor de análisis financiero de una app de finanzas personales para colombianos. "
-    "Tu única función es clasificar gastos en categorías y devolver JSON válido. "
+# ─────────────────────────────────────────────────────────────────────────────
+# Prompts
+# ─────────────────────────────────────────────────────────────────────────────
+
+SYSTEM_BASE = (
+    "Eres KALO, el asistente nutricional personal de una app de seguimiento calórico para colombianos. "
     "Responde SIEMPRE en español. NUNCA uses otro idioma. "
-    "NUNCA expliques tu razonamiento. SOLO devuelve el JSON solicitado, sin texto adicional."
+    "Sé directo, amigable y motivador. "
+    "NUNCA inventes datos que el usuario no haya proporcionado. "
+    "SOLO devuelve el JSON solicitado, sin texto adicional, sin backticks, sin markdown."
 )
 
-PROMPT_FACTURA = """Analiza el siguiente contenido de una factura o recibo y clasifica el gasto total por categorías.
+PROMPT_FOTO = """Analiza la imagen de este plato de comida.
+Si hay un cubierto (tenedor o cuchillo) úsalo como referencia de tamaño para estimar las porciones.
 
-CATEGORÍAS DISPONIBLES (usa exactamente estos nombres):
-HOGAR, CANASTA, MEDICAMENTOS, OCIO, ANTOJO, TRANSPORTE, TECNOLOGÍA, ROPA, EDUCACIÓN, MASCOTAS
-
-REGLAS:
-- CANASTA: mercado del día a día, alimentos básicos, aseo del hogar.
-- ANTOJO: comida por placer, restaurantes, domicilios, dulces, snacks.
-- HOGAR: arriendo, servicios públicos, reparaciones, muebles.
-- MEDICAMENTOS: farmacia, consultas médicas, parafarmacia.
-- OCIO: streaming, entretenimiento, deportes, viajes, videojuegos.
-- TRANSPORTE: gasolina, taxi, bus, peajes, Uber.
-- TECNOLOGÍA: celulares, computadores, software, internet.
-- ROPA: ropa, calzado, accesorios de vestir.
-- EDUCACIÓN: cursos, libros, útiles escolares, matrículas.
-- MASCOTAS: veterinario, concentrado, accesorios para mascotas.
-- Solo incluye categorías con valor > 0.
-- Los totales deben ser números con máximo 2 decimales.
-
-{contenido}
-
-Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
+Devuelve ÚNICAMENTE este JSON:
 {{
-  "categorias": {{"CATEGORIA": total_en_pesos}},
-  "comercio": "nombre del comercio o null",
-  "fecha": "YYYY-MM-DD o null",
-  "total_factura": total_general_en_pesos
+  "descripcion": "descripción breve del plato y sus componentes",
+  "kcal_estimadas": total_calorias_entero,
+  "confianza": "ALTA",
+  "detalle": "Arroz blanco ~200kcal, pollo ~180kcal, ensalada ~70kcal"
+}}
+
+Reglas:
+- confianza: ALTA (alimentos claramente visibles), MEDIA (parcialmente visible o ambiguo), BAJA (muy difícil de determinar).
+- kcal_estimadas: número entero, calorías totales del plato visible.
+- detalle: desglose breve por componente con kcal aproximadas.
+- Si no hay cubierto de referencia, asume porción estándar colombiana y baja confianza a MEDIA.
+- Si la imagen no es de comida, devuelve kcal_estimadas: 0 y confianza: BAJA."""
+
+PROMPT_TEXTO = """El usuario de una app de seguimiento calórico escribió esto libremente:
+"{texto}"
+
+Contexto del usuario hoy:
+- Calorías objetivo: {objetivo} kcal
+- Calorías consumidas: {consumidas} kcal
+- Calorías quemadas por ejercicio: {quemadas} kcal
+- Calorías disponibles: {disponibles} kcal
+
+Tu tarea es interpretar qué quiere hacer el usuario y extraer los datos relevantes.
+
+Devuelve ÚNICAMENTE este JSON:
+{{
+  "intent": "REGISTRAR_COMIDA | REGISTRAR_EJERCICIO | CONSULTAR_BALANCE | PEDIR_SUGERENCIA | OTRO",
+  "descripcion": "qué identificaste que quiere hacer",
+  "kcal": numero_o_null,
+  "alimento": "nombre del alimento si aplica o null",
+  "ejercicio": "nombre del ejercicio si aplica o null",
+  "duracion_min": numero_o_null,
+  "respuesta_directa": "respuesta conversacional al usuario en 1-2 oraciones"
 }}"""
 
-PROMPT_GASTO_MANUAL = """El usuario describió uno o varios gastos con sus propias palabras. Extrae TODOS los gastos mencionados.
+PROMPT_SUGERENCIA = """El usuario lleva el siguiente balance calórico hoy:
+- Objetivo diario: {objetivo} kcal
+- Consumidas: {consumidas} kcal
+- Quemadas (ejercicio): {quemadas} kcal
+- Disponibles: {disponibles} kcal
+- Hora del día: {hora}
+- Comidas registradas hoy: {comidas}
 
-CATEGORÍAS DISPONIBLES (usa exactamente estos nombres):
-HOGAR, CANASTA, MEDICAMENTOS, OCIO, ANTOJO, TRANSPORTE, TECNOLOGÍA, ROPA, EDUCACIÓN, MASCOTAS
+Genera una sugerencia nutricional personalizada, práctica y motivadora.
 
-REGLAS PARA EL MONTO:
-- Interpreta cualquier formato colombiano: 5k → 5000, 5mil → 5000, 5.000 → 5000, 5,000 → 5000, 5 lucas → 5000.
-- El monto siempre es en pesos colombianos (COP).
-- Si un gasto no tiene monto claro, usa null.
-- Si hay varios gastos, devuelve uno por ítem.
-
-REGLAS PARA LA CATEGORÍA:
-- CANASTA: pan, arroz, leche, huevos, frutas, verduras, mercado básico.
-- ANTOJO: gaseosa, snacks, dulces, comida por placer, restaurante, domicilio.
-- MASCOTAS: comida para perro/gato, veterinario, accesorios de mascotas.
-- HOGAR: servicios públicos, arriendo, reparaciones.
-- MEDICAMENTOS: drogas, farmacia, consulta médica.
-- OCIO: entretenimiento, streaming, deporte, videojuegos.
-- TRANSPORTE: bus, taxi, Uber, gasolina, peaje.
-- TECNOLOGÍA: celular, computador, internet, software.
-- ROPA: ropa, zapatos, accesorios de vestir.
-- EDUCACIÓN: libros, cursos, útiles, matrícula.
-
-DESCRIPCIÓN: {descripcion}
-
-Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
-[
-  {{"categoria": "NOMBRE_CATEGORIA", "monto": valor_numerico_o_null, "descripcion": "descripcion corta del item"}},
-  ...
-]"""
+Devuelve ÚNICAMENTE este JSON:
+{{
+  "mensaje": "sugerencia principal en 2-3 oraciones",
+  "opciones": ["opción de comida 1", "opción de comida 2", "opción de comida 3"],
+  "advertencia": "texto de advertencia si las calorías están muy desbalanceadas, o null"
+}}"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helpers de validación (privados a LUKA)
+# Modelos de request
 # ─────────────────────────────────────────────────────────────────────────────
-def _validar_categorias(categorias: dict) -> dict:
-    resultado = {}
-    for cat, total in categorias.items():
-        cat_upper = cat.upper().strip()
-        if cat_upper in CATEGORIAS_VALIDAS:
-            try:
-                valor = float(total)
-                if valor > 0:
-                    resultado[cat_upper] = round(valor, 2)
-            except (TypeError, ValueError):
-                pass  # valor inválido, se ignora silenciosamente
-        # categorías desconocidas se ignoran
-    if not resultado:
-        raise ValueError("El modelo no devolvió ninguna categoría válida.")
-    return resultado
+
+class FotoComidaRequest(BaseModel):
+    imagen_b64: str
 
 
-def _validar_gastos_manuales(data: Any) -> list:
-    if not isinstance(data, list):
-        data = [data]
-    resultado = []
-    for item in data:
-        categoria = str(item.get("categoria", "")).upper().strip()
-        if categoria not in CATEGORIAS_VALIDAS:
-            continue
-        monto_raw = item.get("monto")
-        monto     = round(float(monto_raw), 2) if monto_raw is not None else None
-        descripcion = item.get("descripcion", "").strip() or None
-        resultado.append({
-            "categoria":   categoria,
-            "monto":       monto,
-            "descripcion": descripcion,
-        })
-    if not resultado:
-        raise ValueError("El modelo no devolvió ningún gasto válido.")
-    return resultado
+class TextoLibreRequest(BaseModel):
+    texto: str
+    objetivo: float = 2000
+    consumidas: float = 0
+    quemadas: float = 0
+    disponibles: float = 2000
 
 
-def _procesar_resultado_factura(data: dict) -> dict:
-    categorias = _validar_categorias(data.get("categorias", {}))
+class SugerenciaRequest(BaseModel):
+    objetivo: float
+    consumidas: float
+    quemadas: float
+    disponibles: float
+    hora: str = "12:00"
+    comidas: str = "Sin registros aún"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers de validación
+# ─────────────────────────────────────────────────────────────────────────────
+
+INTENTS_VALIDOS = {
+    "REGISTRAR_COMIDA", "REGISTRAR_EJERCICIO",
+    "CONSULTAR_BALANCE", "PEDIR_SUGERENCIA", "OTRO",
+}
+
+def _validar_foto(data: dict) -> dict:
+    try:
+        kcal = int(float(data.get("kcal_estimadas", 0)))
+    except (TypeError, ValueError):
+        raise ValueError("kcal_estimadas debe ser un número.")
+    confianza = str(data.get("confianza", "MEDIA")).upper().strip()
+    if confianza not in {"ALTA", "MEDIA", "BAJA"}:
+        confianza = "MEDIA"
+    descripcion = str(data.get("descripcion", "")).strip()
+    if not descripcion:
+        raise ValueError("El modelo no devolvió descripción del plato.")
     return {
-        "categorias":    categorias,
-        "comercio":      data.get("comercio") or None,
-        "fecha":         data.get("fecha") or None,
-        "total_factura": round(float(data.get("total_factura") or sum(categorias.values())), 2),
+        "descripcion":    descripcion,
+        "kcal_estimadas": kcal,
+        "confianza":      confianza,
+        "detalle":        str(data.get("detalle", "")).strip() or None,
+    }
+
+
+def _validar_texto(data: dict) -> dict:
+    intent = str(data.get("intent", "OTRO")).upper().strip()
+    if intent not in INTENTS_VALIDOS:
+        intent = "OTRO"
+    return {
+        "intent":           intent,
+        "descripcion":      str(data.get("descripcion", "")).strip() or None,
+        "kcal":             float(data["kcal"]) if data.get("kcal") is not None else None,
+        "alimento":         data.get("alimento") or None,
+        "ejercicio":        data.get("ejercicio") or None,
+        "duracion_min":     int(data["duracion_min"]) if data.get("duracion_min") is not None else None,
+        "respuesta_directa": str(data.get("respuesta_directa", "")).strip() or None,
+    }
+
+
+def _validar_sugerencia(data: dict) -> dict:
+    mensaje = str(data.get("mensaje", "")).strip()
+    if not mensaje:
+        raise ValueError("El modelo no devolvió sugerencia.")
+    opciones = data.get("opciones", [])
+    if not isinstance(opciones, list):
+        opciones = []
+    return {
+        "mensaje":     mensaje,
+        "opciones":    [str(o).strip() for o in opciones if o],
+        "advertencia": str(data.get("advertencia", "")).strip() or None,
     }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Modelos de request LUKA
+# Router KALO
 # ─────────────────────────────────────────────────────────────────────────────
-class TextoRequest(BaseModel):
-    texto: str
 
-class ImagenRequest(BaseModel):
-    imagen_b64: str
-
-class GastoManualRequest(BaseModel):
-    descripcion: str
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Router LUKA
-# ─────────────────────────────────────────────────────────────────────────────
-class LukaRouter(BaseRouter):
+class KaloRouter(BaseRouter):
     """
-    Router de inferencia IA para LUKA.
-    Todos los endpoints quedan bajo el prefijo /luka/.
+    Router de inferencia IA para KALO.
+    Todos los endpoints quedan bajo el prefijo /kalo/.
 
-    La luka-api (Docker) debe apuntar a:
-        KR_HOST:KR_PORT/luka/categorizar-factura-texto
-        KR_HOST:KR_PORT/luka/categorizar-factura-imagen
-        KR_HOST:KR_PORT/luka/categorizar-gasto-manual
-
-    Nota Docker Desktop: Docker Desktop en Mac enruta tráfico saliente
-    de contenedores a través de la red del host. Los contenedores pueden
-    alcanzar KR_HOST:KR_PORT directamente. NO usar host.docker.internal
-    aquí porque ese alias apunta a 127.0.0.1 del host, y el servidor ya
-    no escucha en 127.0.0.1.
+    La kalo-api (Docker) apunta a cada endpoint según la función:
+        LLM_VISION_URL=http://<aibase-ip>:8181/kalo/analizar-foto-comida
+        LLM_TEXT_URL=http://<aibase-ip>:8181/kalo/interpretar-texto
+        LLM_SUGGEST_URL=http://<aibase-ip>:8181/kalo/sugerencia-nutricional
     """
 
-    prefix = "/luka"
+    prefix = "/kalo"
 
     def _registrar_rutas(self) -> None:
 
-        @self.router.post("/categorizar-factura-texto")
-        def categorizar_factura_texto(req: TextoRequest):
-            if not req.texto.strip():
-                raise HTTPException(status_code=422, detail="El texto no puede estar vacío.")
-            try:
-                prompt = PROMPT_FACTURA.format(
-                    contenido=f"TEXTO DE LA FACTURA:\n{req.texto.strip()}"
-                )
-                data = self.motor.extraer_json(
-                    self.motor.texto(prompt, max_tokens=600)
-                )
-                return _procesar_resultado_factura(data)
-            except ValueError as e:
-                raise HTTPException(status_code=422, detail=str(e))
-
-        @self.router.post("/categorizar-factura-imagen")
-        def categorizar_factura_imagen(req: ImagenRequest):
+        @self.router.post("/analizar-foto-comida")
+        def analizar_foto_comida(req: FotoComidaRequest):
+            """Estima las calorías de un plato a partir de una imagen en base64."""
             if not req.imagen_b64.strip():
                 raise HTTPException(status_code=422, detail="La imagen no puede estar vacía.")
             try:
-                prompt = PROMPT_FACTURA.format(
-                    contenido="Analiza la imagen del recibo o factura que se adjunta."
-                )
                 data = self.motor.extraer_json(
-                    self.motor.imagen(prompt, req.imagen_b64, max_tokens=600)
+                    self.motor.imagen(PROMPT_FOTO, req.imagen_b64, max_tokens=400)
                 )
-                return _procesar_resultado_factura(data)
+                return _validar_foto(data)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
 
-        @self.router.post("/categorizar-gasto-manual")
-        def categorizar_gasto_manual(req: GastoManualRequest):
-            if not req.descripcion.strip():
-                raise HTTPException(status_code=422, detail="La descripción no puede estar vacía.")
+        @self.router.post("/interpretar-texto")
+        def interpretar_texto(req: TextoLibreRequest):
+            """
+            Interpreta texto libre del usuario en el contexto de su balance calórico.
+            Devuelve el intent detectado y datos extraídos para que la API actúe.
+            """
+            if not req.texto.strip():
+                raise HTTPException(status_code=422, detail="El texto no puede estar vacío.")
             try:
-                data = self.motor.extraer_json(
-                    self.motor.texto(
-                        PROMPT_GASTO_MANUAL.format(descripcion=req.descripcion.strip()),
-                        max_tokens=300,
-                    )
+                prompt = PROMPT_TEXTO.format(
+                    texto=req.texto.strip(),
+                    objetivo=req.objetivo,
+                    consumidas=req.consumidas,
+                    quemadas=req.quemadas,
+                    disponibles=req.disponibles,
                 )
-                return _validar_gastos_manuales(data)
+                data = self.motor.extraer_json(
+                    self.motor.texto(prompt, max_tokens=300)
+                )
+                return _validar_texto(data)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
 
-
-# luka_ai_router.py no tiene punto de entrada.
-# El servidor se levanta desde main.py — ver ~/projects/AIBase/main.py
-
+        @self.router.post("/sugerencia-nutricional")
+        def sugerencia_nutricional(req: SugerenciaRequest):
+            """
+            Genera una sugerencia nutricional personalizada según el balance del día.
+            """
+            try:
+                prompt = PROMPT_SUGERENCIA.format(
+                    objetivo=req.objetivo,
+                    consumidas=req.consumidas,
+                    quemadas=req.quemadas,
+                    disponibles=req.disponibles,
+                    hora=req.hora,
+                    comidas=req.comidas,
+                )
+                data = self.motor.extraer_json(
+                    self.motor.texto(prompt, max_tokens=400)
+                )
+                return _validar_sugerencia(data)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
