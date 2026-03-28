@@ -23,6 +23,7 @@ Para agregar un proyecto nuevo:
 
 from kingsrow_ai_base import KingsrowAI
 from luka_ai_router import LukaRouter
+from kalo_ai_router import KaloRouter
 
 # ── Registra aquí todos los proyectos ────────────────────────────────────────
 # from otro_proyecto_router import OtroProyectoRouter
@@ -30,6 +31,7 @@ from luka_ai_router import LukaRouter
 if __name__ == "__main__":
     server = KingsrowAI()
     server.registrar(LukaRouter)
+    server.registrar(KaloRouter)
     # server.registrar(OtroProyectoRouter)   # descomentar cuando llegue
     server.build()
     server.run()
