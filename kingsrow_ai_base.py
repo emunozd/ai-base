@@ -216,7 +216,7 @@ def _construir_prompt(mensajes: list[dict], system: Any = None) -> str:
     if not msgs:
         raise ValueError("No hay mensajes válidos.")
 
-    return processor.apply_chat_template(
+    return tokenizer.apply_chat_template(
         msgs,
         tokenize=False,
         add_generation_prompt=True,
