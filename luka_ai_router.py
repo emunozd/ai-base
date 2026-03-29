@@ -25,7 +25,9 @@ from kingsrow_ai_base import BaseRouter, KingsrowAI, MotorInferencia
 # Constantes LUKA
 # ─────────────────────────────────────────────────────────────────────────────
 CATEGORIAS_VALIDAS = {
-    "HOGAR", "CANASTA", "MEDICAMENTOS", "OCIO", "ANTOJO",
+    "HOGAR", "HOGAR_ARRIENDO", "HOGAR_SERVICIOS", "HOGAR_REPARACIONES",
+    "CANASTA", "CANASTA_VERDURAS", "CANASTA_PROTEINA", "CANASTA_ASEO", "CANASTA_HIGIENE",
+    "MEDICAMENTOS", "OCIO", "ANTOJO",
     "TRANSPORTE", "TECNOLOGÍA", "ROPA", "EDUCACIÓN", "MASCOTAS",
 }
 
@@ -39,7 +41,9 @@ SYSTEM_PROMPT = (
 PROMPT_FACTURA = """Analiza el siguiente contenido de una factura o recibo y clasifica el gasto total por categorías.
 
 CATEGORÍAS DISPONIBLES (usa exactamente estos nombres):
-HOGAR, CANASTA, MEDICAMENTOS, OCIO, ANTOJO, TRANSPORTE, TECNOLOGÍA, ROPA, EDUCACIÓN, MASCOTAS
+HOGAR, HOGAR_ARRIENDO, HOGAR_SERVICIOS, HOGAR_REPARACIONES,
+CANASTA, CANASTA_VERDURAS, CANASTA_PROTEINA, CANASTA_ASEO, CANASTA_HIGIENE,
+MEDICAMENTOS, OCIO, ANTOJO, TRANSPORTE, TECNOLOGÍA, ROPA, EDUCACIÓN, MASCOTAS
 
 REGLAS DE FORMATO NUMÉRICO — MUY IMPORTANTE:
 - Esta es una factura colombiana. El punto (.) es separador de MILES, no decimales.
@@ -48,19 +52,27 @@ REGLAS DE FORMATO NUMÉRICO — MUY IMPORTANTE:
 - NUNCA interpretes el punto como decimal en valores de esta factura.
 - Los totales deben ser números enteros en pesos colombianos (COP), sin puntos ni comas.
 
-REGLAS:
-- CANASTA: mercado del día a día, alimentos básicos, aseo del hogar.
-- ANTOJO: comida por placer, restaurantes, domicilios, dulces, snacks.
-- HOGAR: arriendo, servicios públicos, reparaciones, muebles.
-- MEDICAMENTOS: farmacia, consultas médicas, parafarmacia.
-- OCIO: streaming, entretenimiento, deportes, viajes, videojuegos.
-- TRANSPORTE: gasolina, taxi, bus, peajes, Uber.
-- TECNOLOGÍA: celulares, computadores, software, internet.
-- ROPA: ropa, calzado, accesorios de vestir.
-- EDUCACIÓN: cursos, libros, útiles escolares, matrículas.
-- MASCOTAS: veterinario, concentrado, accesorios para mascotas.
+REGLAS DE CATEGORÍA:
+CANASTA_VERDURAS  → frutas, verduras, tubérculos, granos secos, legumbres frescas.
+CANASTA_PROTEINA  → carnes, pollo, pescado, mariscos, huevos, lácteos (leche, queso, yogur).
+CANASTA_ASEO      → detergente, jabón para ropa, cloro, limpiapisos, escoba, trapero, desinfectante superficies.
+CANASTA_HIGIENE   → desodorante, shampoo, acondicionador, crema corporal, maquillaje, cuidado facial, toallas higiénicas, pañales.
+CANASTA           → alimentos básicos de difícil clasificación (arroz, aceite, sal, azúcar, pasta, enlatados). Usar si no encaja en CANASTA_VERDURAS o CANASTA_PROTEINA.
+HOGAR_ARRIENDO    → arriendo mensual, administración del edificio.
+HOGAR_SERVICIOS   → agua, luz, gas, internet, teléfono fijo.
+HOGAR_REPARACIONES → plomería, electricista, pintura, instalación de puertas o ventanas, reparaciones del inmueble. NUNCA incluir electrodomésticos ni TV aquí.
+HOGAR             → gastos del hogar que no encajan en arriendo, servicios ni reparaciones (ejemplo: elementos de decoración menores).
+MEDICAMENTOS      → farmacia, medicamentos, consultas médicas, parafarmacia.
+OCIO              → streaming, entretenimiento, deportes, viajes, videojuegos, juguetes.
+ANTOJO            → comida por placer, restaurantes, domicilios, dulces, snacks, gaseosas.
+TRANSPORTE        → gasolina, taxi, bus, peajes, Uber, parqueadero.
+TECNOLOGÍA        → celulares, computadores, televisores, electrodomésticos (nevera, lavadora, microondas, etc.), software, internet como servicio de datos.
+ROPA              → ropa, calzado, accesorios de vestir.
+EDUCACIÓN         → cursos, libros, útiles escolares, matrículas.
+MASCOTAS          → veterinario, concentrado, accesorios para mascotas.
+
 - Solo incluye categorías con valor > 0.
-- Los totales deben ser números con máximo 2 decimales.
+- Los totales deben ser números enteros sin separadores.
 
 {contenido}
 
@@ -75,7 +87,9 @@ Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
 PROMPT_GASTO_MANUAL = """El usuario describió uno o varios gastos con sus propias palabras. Extrae TODOS los gastos mencionados.
 
 CATEGORÍAS DISPONIBLES (usa exactamente estos nombres):
-HOGAR, CANASTA, MEDICAMENTOS, OCIO, ANTOJO, TRANSPORTE, TECNOLOGÍA, ROPA, EDUCACIÓN, MASCOTAS
+HOGAR, HOGAR_ARRIENDO, HOGAR_SERVICIOS, HOGAR_REPARACIONES,
+CANASTA, CANASTA_VERDURAS, CANASTA_PROTEINA, CANASTA_ASEO, CANASTA_HIGIENE,
+MEDICAMENTOS, OCIO, ANTOJO, TRANSPORTE, TECNOLOGÍA, ROPA, EDUCACIÓN, MASCOTAS
 
 REGLAS PARA EL MONTO:
 - Interpreta cualquier formato colombiano: 5k → 5000, 5mil → 5000, 5.000 → 5000, 5,000 → 5000, 5 lucas → 5000.
@@ -84,16 +98,23 @@ REGLAS PARA EL MONTO:
 - Si hay varios gastos, devuelve uno por ítem.
 
 REGLAS PARA LA CATEGORÍA:
-- CANASTA: pan, arroz, leche, huevos, frutas, verduras, mercado básico.
-- ANTOJO: gaseosa, snacks, dulces, comida por placer, restaurante, domicilio.
-- MASCOTAS: comida para perro/gato, veterinario, accesorios de mascotas.
-- HOGAR: servicios públicos, arriendo, reparaciones.
-- MEDICAMENTOS: drogas, farmacia, consulta médica.
-- OCIO: entretenimiento, streaming, deporte, videojuegos.
-- TRANSPORTE: bus, taxi, Uber, gasolina, peaje.
-- TECNOLOGÍA: celular, computador, internet, software.
-- ROPA: ropa, zapatos, accesorios de vestir.
-- EDUCACIÓN: libros, cursos, útiles, matrícula.
+CANASTA_VERDURAS  → frutas, verduras, tubérculos, granos secos, legumbres frescas.
+CANASTA_PROTEINA  → carnes, pollo, pescado, mariscos, huevos, lácteos (leche, queso, yogur).
+CANASTA_ASEO      → detergente, jabón ropa, cloro, limpiapisos, escoba, trapero, desinfectante.
+CANASTA_HIGIENE   → desodorante, shampoo, crema, maquillaje, cuidado facial, toallas higiénicas, pañales.
+CANASTA           → alimentos básicos que no encajan en verduras ni proteína (arroz, aceite, sal, azúcar, pasta, enlatados).
+HOGAR_ARRIENDO    → arriendo, administración.
+HOGAR_SERVICIOS   → agua, luz, gas, internet, teléfono fijo.
+HOGAR_REPARACIONES → plomería, electricista, pintura, puertas, ventanas, instalaciones del inmueble. NUNCA electrodomésticos ni TV.
+HOGAR             → gastos del hogar sin clasificación clara.
+MEDICAMENTOS      → drogas, farmacia, consulta médica, parafarmacia.
+OCIO              → entretenimiento, streaming, deporte, videojuegos, viajes.
+ANTOJO            → gaseosa, snacks, dulces, comida por placer, restaurante, domicilio.
+TRANSPORTE        → bus, taxi, Uber, gasolina, peaje, parqueadero.
+TECNOLOGÍA        → celular, computador, televisor, electrodomésticos (nevera, lavadora, microondas, etc.), software, datos móviles.
+ROPA              → ropa, zapatos, accesorios de vestir.
+EDUCACIÓN         → libros, cursos, útiles, matrícula.
+MASCOTAS          → veterinario, concentrado, accesorios mascotas.
 
 DESCRIPCIÓN: {descripcion}
 
