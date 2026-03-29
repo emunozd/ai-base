@@ -72,6 +72,12 @@ HOGAR, HOGAR_ARRIENDO, HOGAR_SERVICIOS, HOGAR_REPARACIONES,
 CANASTA, CANASTA_VERDURAS, CANASTA_PROTEINA, CANASTA_ASEO, CANASTA_HIGIENE,
 MEDICAMENTOS, OCIO, ANTOJO, TRANSPORTE, TECNOLOGÍA, ROPA, EDUCACIÓN, MASCOTAS
 
+REGLAS DE MONTOS:
+- El punto (.) es separador de miles. Ejemplo: 42.668 = 42668. NUNCA es decimal.
+- El monto es el valor que aparece en la línea del artículo, sin modificar.
+- El descuento es el valor que aparece en la línea "Descuento XX% VALOR-" que sigue al artículo. Si no hay descuento, usa 0.
+- NO restes nada, devuelve monto y descuento por separado como números enteros.
+
 REGLAS DE CATEGORÍA:
 CANASTA_VERDURAS  → frutas, verduras, tubérculos, granos secos, legumbres frescas.
 CANASTA_PROTEINA  → carnes, pollo, pescado, mariscos, huevos, lácteos (leche, queso, yogur, mantequilla).
@@ -349,6 +355,7 @@ class LukaRouter(BaseRouter):
                 )
                 if not texto_transcrito.strip():
                     raise ValueError("No se pudo transcribir el contenido de la imagen.")
+                logger.info("TRANSCRIPCIÓN PASADA 1:\n%s", texto_transcrito)
 
                 # Python parsea el texto transcrito y aplica descuentos exactamente
                 items_con_monto, comercio, fecha = _parsear_texto_factura(texto_transcrito)
@@ -363,8 +370,9 @@ class LukaRouter(BaseRouter):
                 lista_productos = "\n".join(
                     f"- {item['descripcion']}" for item in items_con_monto
                 )
-                prompt = PROMPT_CLASIFICAR_ITEMS.format(productos=lista_productos)
+                prompt = PROMPT_CLASIFICAR_ITEMS.format(productos=texto_transcrito.strip())
                 raw    = self.motor.texto(prompt, max_tokens=800)
+                logger.info("CLASIFICACIÓN PASADA 2:\n%s", raw)
                 data   = self.motor.extraer_json(raw)
                 if not isinstance(data, list):
                     raise ValueError("El modelo no devolvió una lista de clasificaciones.")
