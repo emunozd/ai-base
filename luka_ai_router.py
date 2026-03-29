@@ -148,65 +148,56 @@ Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
 def _parsear_texto_factura(texto: str) -> tuple[list[dict], str | None, str | None]:
     lineas = texto.strip().split("\n")
     items = []
-    comercio = None
+    comercio = "Comercio Desconocido"
     fecha = None
 
-    # 1. Detectar Fecha
-    for linea in lineas:
-        m = re.search(r"Fecha[:\s]+(\d{4}[/\-]\d{2}[/\-]\d{2})", linea, re.IGNORECASE)
-        if m:
-            fecha = m.group(1).replace("/", "-")
-            break
-
-    # 2. Detectar Comercio (Mejorado para saltar encabezados de "Factura")
-    for linea in lineas[:10]:
-        linea_s = linea.strip()
-        if (re.match(r"^[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s\.\-]+$", linea_s)
-                and len(linea_s) > 4
-                and not re.match(r"^(Fecha|Pedido|Caja|Cajera|Cliente|Direcc|Barrio|Telefo|Email|Forma|Medio|Observa|Factura)", linea_s, re.IGNORECASE)):
-            comercio = linea_s
-            break
-
-    # Regex mejorados
-    # Detecta: # Articulo + Codigo + ... + Monto (Ej: 1 176 EXC 0 1,14 7.443)
-    pat_item = re.compile(r"^\d+\s+\S+.*?\s+([\d]{1,3}(?:\.[\d]{3})+)\s*$")
-    # Detecta descuento con o sin signo menos al final
+    # 1. Regex específicos
+    # Busca: Inicio de línea con número + cualquier cosa + espacio + Monto (X.XXX o XX.XXX)
+    pat_item = re.compile(r"^\d+\s+.*?\s+([\d]{1,3}(?:\.[\d]{3})+)$")
     pat_desc = re.compile(r"[Dd]escuento\s+[\d,\.]+\s*%\s+([\d\.]+)-?")
     
+    # 2. Detectar Comercio y Fecha
+    for linea in lineas[:15]:
+        linea_s = linea.strip()
+        if not fecha:
+            m_f = re.search(r"(\d{4}[/\-]\d{2}[/\-]\d{2})", linea_s)
+            if m_f: fecha = m_f.group(1).replace("/", "-")
+        
+        # El comercio suele ser la primera línea relevante que no sea "Factura..."
+        if comercio == "Comercio Desconocido" and len(linea_s) > 5:
+            if not re.search(r"(Factura|Pedido|Caja|Fecha|Cliente|Direcc|#)", linea_s, re.I):
+                comercio = linea_s
+
     item_actual = None
 
     for linea in lineas:
         linea_s = linea.strip()
-        if not linea_s or "Subtotal" in linea_s or "Valor Total" in linea_s:
+        if not linea_s or any(x in linea_s for x in ["Subtotal", "Total IVA", "Valor Total"]):
             continue
 
-        # CASO A: Es una línea de encabezado de ítem (Número y Monto)
+        # ¿Es una línea de ítem? (Ej: 8 240062700000 0 0 6,86 115.316)
         m_item = pat_item.match(linea_s)
         if m_item:
-            # Si ya había uno pendiente sin cerrar, lo guardamos
-            if item_actual:
-                items.append(item_actual)
+            if item_actual: items.append(item_actual)
             
             monto = int(m_item.group(1).replace(".", ""))
-            item_actual = {"descripcion": "Producto sin nombre", "monto": monto}
+            item_actual = {"descripcion": "", "monto": monto}
             continue
 
-        # CASO B: Es una línea de descuento
+        # ¿Es una línea de descuento?
         m_desc = pat_desc.search(linea_s)
         if m_desc and item_actual:
-            descuento = int(m_desc.group(1).replace(".", ""))
-            item_actual["monto"] = max(0, item_actual["monto"] - descuento)
+            desc_val = int(m_desc.group(1).replace(".", ""))
+            item_actual["monto"] = max(0, item_actual["monto"] - desc_val)
             continue
 
-        # CASO C: Es la descripción (línea de texto que sigue al ítem)
-        if item_actual and item_actual["descripcion"] == "Producto sin nombre":
-            # Validamos que sea texto y no basura
-            if re.match(r"^[A-Za-zÁÉÍÓÚÑ]", linea_s) and len(linea_s) > 3:
+        # Si tenemos un ítem pero no tiene descripción, esta línea lo es
+        if item_actual and not item_actual["descripcion"]:
+            # Filtramos que no sea una línea de puros números o etiquetas conocidas
+            if not re.match(r"^[0-9\s,.-]+$", linea_s) and len(linea_s) > 2:
                 item_actual["descripcion"] = linea_s
 
-    # Guardar el último
-    if item_actual:
-        items.append(item_actual)
+    if item_actual: items.append(item_actual)
 
     return items, comercio, fecha
 
