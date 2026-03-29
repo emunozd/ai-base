@@ -63,10 +63,22 @@ REGLAS DE FORMATO NUMÉRICO — MUY IMPORTANTE:
 - Ejemplos: 115.316 = 115316 pesos. 42.668 = 42668 pesos.
 - NUNCA interpretes el punto como decimal. Siempre es separador de miles.
 - Los montos deben ser números enteros en pesos colombianos (COP), sin puntos ni comas.
-- DESCUENTOS: cuando aparece una línea "Descuento XX% VALOR-", ese valor se resta del ítem anterior.
   Ejemplo: ítem vale 72.500, Descuento 25% 18.126-, el monto final es 72500 - 18126 = 54374.
 - Usa SIEMPRE el valor final después de aplicar el descuento.
 - El signo "-" al final de un valor indica que es un descuento a restar.
+
+REGLAS DE DESCUENTOS — MUY IMPORTANTE:
+- Trata los valores de la factura como una suma acumulativa de arriba a abajo.
+- Cualquier valor seguido de "-" es un descuento que se RESTA del ítem inmediatamente anterior.
+- El valor junto a "Descuento XX%" con "-" es el monto exacto a restar, no el porcentaje.
+- Ejemplo genérico:
+    Producto A: 50.000
+    Descuento 20% 10.000-
+    → monto final de Producto A = 50000 - 10000 = 40000
+- NUNCA uses el valor antes del descuento como monto final.
+- NUNCA incluyas líneas de descuento como ítems separados.
+- Si no hay línea de descuento después de un ítem, el valor mostrado ES el monto final.
+- Verifica que la suma de todos los ítems se aproxime al Valor Total de la factura.
 
 REGLAS DE CATEGORÍA:
 CANASTA_VERDURAS  → frutas, verduras, tubérculos, granos secos, legumbres frescas.
