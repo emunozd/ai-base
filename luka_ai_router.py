@@ -60,11 +60,13 @@ MEDICAMENTOS, OCIO, ANTOJO, TRANSPORTE, TECNOLOGÍA, ROPA, EDUCACIÓN, MASCOTAS
 
 REGLAS DE FORMATO NUMÉRICO — MUY IMPORTANTE:
 - Esta es una factura colombiana. El punto (.) es separador de MILES, no decimales.
-- La coma (,) es separador decimal en centavos (raro en facturas COP).
-- Ejemplos: 494.498 = 494498 pesos. 115.316 = 115316 pesos. 42.668 = 42668 pesos. 7.443 = 7443 pesos.
+- Ejemplos: 115.316 = 115316 pesos. 42.668 = 42668 pesos.
 - NUNCA interpretes el punto como decimal. Siempre es separador de miles.
 - Los montos deben ser números enteros en pesos colombianos (COP), sin puntos ni comas.
-- Si la factura muestra descuentos, usa el valor DESPUÉS del descuento (valor final pagado).
+- DESCUENTOS: cuando aparece una línea "Descuento XX% VALOR-", ese valor se resta del ítem anterior.
+  Ejemplo: ítem vale 72.500, Descuento 25% 18.126-, el monto final es 72500 - 18126 = 54374.
+- Usa SIEMPRE el valor final después de aplicar el descuento.
+- El signo "-" al final de un valor indica que es un descuento a restar.
 
 REGLAS DE CATEGORÍA:
 CANASTA_VERDURAS  → frutas, verduras, tubérculos, granos secos, legumbres frescas.
