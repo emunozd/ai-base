@@ -135,23 +135,9 @@ Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
   ...
 ]"""
 
-PROMPT_TRANSCRIBIR = """De esta factura o recibo, extrae la siguiente información en formato compacto.
-
-COMERCIO: <nombre del comercio o NULO>
-FECHA: <fecha en formato YYYY-MM-DD o NULO>
-
-ARTÍCULOS (una línea por artículo):
-<nombre del artículo>: <valor final en pesos>
-
-Reglas de valores:
-- El punto (.) es separador de miles. Ejemplo: 42.668 → 42668. NUNCA es decimal.
-- Si hay descuento, usa el valor DESPUÉS del descuento.
-- NO omitas ningún artículo — transcribe absolutamente todos los que aparecen.
-- No incluyas subtotales, IVA ni total general.
-- No incluyas códigos de barras ni números de referencia.
-- Solo nombre del producto y valor final pagado.
-
-IMPORTANTE: La factura dice "Total lineas factura: 24" — deben aparecer exactamente 24 artículos."""
+PROMPT_TRANSCRIBIR = """Transcribe el texto de esta factura exactamente como aparece, línea por línea.
+Incluye todos los nombres de productos, cantidades, precios y descuentos tal como están escritos.
+No interpretes, no calcules, no reorganices. Solo copia el texto que ves en la imagen."""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers de validación y procesamiento
@@ -305,7 +291,7 @@ class LukaRouter(BaseRouter):
             if not req.imagen_b64.strip():
                 raise HTTPException(status_code=422, detail="La imagen no puede estar vacía.")
             try:
-                # Pasada 1 — transcripción del texto de la imagen
+                # Pasada 1 — transcripción literal
                 texto_transcrito = self.motor.imagen(
                     PROMPT_TRANSCRIBIR,
                     req.imagen_b64,
@@ -315,11 +301,11 @@ class LukaRouter(BaseRouter):
                 if not texto_transcrito.strip():
                     raise ValueError("No se pudo transcribir el contenido de la imagen.")
 
-                # Pasada 2 — clasificación sobre el texto transcrito (mismo flujo que texto)
+                # Pasada 2 — clasificación completa incluyendo comercio y fecha
                 prompt = PROMPT_FACTURA.format(
                     contenido=f"TEXTO DE LA FACTURA:\n{texto_transcrito.strip()}"
                 )
-                raw   = self.motor.texto(prompt, max_tokens=1200)
+                raw   = self.motor.texto(prompt, max_tokens=900)
                 data  = self.motor.extraer_json(raw)
                 items, comercio, fecha = _extraer_meta_factura(data)
                 return _procesar_items_factura(items, comercio, fecha)
