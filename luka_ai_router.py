@@ -132,6 +132,10 @@ Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
   ...
 ]"""
 
+PROMPT_TRANSCRIBIR = """Transcribe EXACTAMENTE el contenido de esta factura o recibo.
+Incluye todos los artículos con sus cantidades y valores finales pagados.
+Mantén los números exactamente como aparecen en la imagen, incluyendo puntos y comas.
+No interpretes ni calcules nada. Solo transcribe el texto que ves."""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers de validación y procesamiento
@@ -285,13 +289,21 @@ class LukaRouter(BaseRouter):
             if not req.imagen_b64.strip():
                 raise HTTPException(status_code=422, detail="La imagen no puede estar vacía.")
             try:
-                prompt = PROMPT_FACTURA.format(
-                    contenido="Analiza la imagen del recibo o factura que se adjunta. "
-                              "Extrae cada ítem con su nombre, monto final pagado y categoría."
+                # Pasada 1 — transcripción del texto de la imagen
+                texto_transcrito = self.motor.imagen(
+                    PROMPT_TRANSCRIBIR,
+                    req.imagen_b64,
+                    max_tokens=800,
                 )
-                # max_tokens aumentado: ahora el modelo devuelve un ítem por línea
-                raw  = self.motor.imagen(prompt, req.imagen_b64, max_tokens=1200)
-                data = self.motor.extraer_json(raw)
+                if not texto_transcrito.strip():
+                    raise ValueError("No se pudo transcribir el contenido de la imagen.")
+
+                # Pasada 2 — clasificación sobre el texto transcrito (mismo flujo que texto)
+                prompt = PROMPT_FACTURA.format(
+                    contenido=f"TEXTO DE LA FACTURA:\n{texto_transcrito.strip()}"
+                )
+                raw   = self.motor.texto(prompt, max_tokens=1200)
+                data  = self.motor.extraer_json(raw)
                 items, comercio, fecha = _extraer_meta_factura(data)
                 return _procesar_items_factura(items, comercio, fecha)
             except ValueError as e:
