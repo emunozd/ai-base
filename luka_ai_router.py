@@ -65,44 +65,44 @@ Mantén los números exactamente como aparecen: no redondees, no interpretes, no
 Conserva los puntos y comas tal cual están en la imagen.
 Solo transcribe — no clasifiques ni expliques nada."""
 
-PROMPT_CLASIFICAR_ITEMS = """Clasifica cada uno de los siguientes productos en una categoría de gasto.
+PROMPT_CLASIFICAR_ITEMS = """Analiza el texto de esta factura. Para cada artículo devuelve nombre, monto, descuento y categoría.
 
 CATEGORÍAS DISPONIBLES (usa exactamente estos nombres):
 HOGAR, HOGAR_ARRIENDO, HOGAR_SERVICIOS, HOGAR_REPARACIONES,
 CANASTA, CANASTA_VERDURAS, CANASTA_PROTEINA, CANASTA_ASEO, CANASTA_HIGIENE,
 MEDICAMENTOS, OCIO, ANTOJO, TRANSPORTE, TECNOLOGÍA, ROPA, EDUCACIÓN, MASCOTAS
 
-REGLAS DE MONTOS:
-- El punto (.) es separador de miles. Ejemplo: 42.668 = 42668. NUNCA es decimal.
-- El monto es el valor que aparece en la línea del artículo, sin modificar.
-- El descuento es el valor que aparece en la línea "Descuento XX% VALOR-" que sigue al artículo. Si no hay descuento, usa 0.
-- NO restes nada, devuelve monto y descuento por separado como números enteros.
+REGLAS DE MONTOS — MUY IMPORTANTE:
+- El punto (.) es separador de miles. 42.668 = 42668. NUNCA es decimal.
+- "monto" es el valor del artículo tal como aparece en la factura, como número entero sin separadores.
+- "descuento" es el valor que aparece en la línea "Descuento XX% VALOR-" que sigue al artículo. Si no hay descuento usa 0.
+- NO restes nada — devuelve monto y descuento por separado. Python hará la resta.
 
 REGLAS DE CATEGORÍA:
-CANASTA_VERDURAS  → frutas, verduras, tubérculos, granos secos, legumbres frescas.
-CANASTA_PROTEINA  → carnes, pollo, pescado, mariscos, huevos, lácteos (leche, queso, yogur, mantequilla).
-CANASTA_ASEO      → detergente, jabón para ropa, cloro, limpiapisos, escoba, trapero, desinfectante, vinagre de limpieza, toallas de manos, pañuelos desechables.
-CANASTA_HIGIENE   → desodorante, shampoo, acondicionador, crema corporal, maquillaje, cuidado facial, toallas higiénicas, pañales, jabón de baño, aceite corporal.
-CANASTA           → alimentos básicos (arroz, aceite, sal, azúcar, pasta, enlatados, especias, salsas, champiñones, aceite de cocina). Usar si no encaja en CANASTA_VERDURAS ni CANASTA_PROTEINA.
-HOGAR_ARRIENDO    → arriendo mensual, administración del edificio.
+CANASTA_VERDURAS  → frutas, verduras, tubérculos, legumbres frescas.
+CANASTA_PROTEINA  → carnes, pollo, pescado, huevos, lácteos, mantequilla.
+CANASTA_ASEO      → detergente, cloro, limpiapisos, trapero, desinfectante, vinagre limpieza, toallas manos, pañuelos.
+CANASTA_HIGIENE   → shampoo, crema, maquillaje, cuidado facial, jabón baño, aceite corporal, toallas higiénicas.
+CANASTA           → arroz, aceite, sal, azúcar, pasta, enlatados, especias, champiñones. Usar si no encaja arriba.
+HOGAR_ARRIENDO    → arriendo, administración.
 HOGAR_SERVICIOS   → agua, luz, gas, internet, teléfono fijo.
-HOGAR_REPARACIONES → plomería, electricista, pintura, instalación de puertas o ventanas. NUNCA electrodomésticos ni TV.
-HOGAR             → elementos del hogar que no encajan en las anteriores.
-MEDICAMENTOS      → farmacia, medicamentos, consultas médicas, parafarmacia.
-OCIO              → streaming, entretenimiento, deportes, viajes, videojuegos, juguetes.
-ANTOJO            → comida por placer, restaurantes, domicilios, dulces, snacks, gaseosas.
-TRANSPORTE        → gasolina, taxi, bus, peajes, Uber, parqueadero.
-TECNOLOGÍA        → celulares, computadores, televisores, electrodomésticos (nevera, lavadora, microondas), software, datos móviles.
-ROPA              → ropa, calzado, accesorios de vestir.
-EDUCACIÓN         → cursos, libros, útiles escolares, matrículas.
-MASCOTAS          → veterinario, concentrado, accesorios para mascotas.
+HOGAR_REPARACIONES → plomería, electricista, pintura, puertas. NUNCA electrodomésticos.
+HOGAR             → hogar sin clasificación clara.
+MEDICAMENTOS      → farmacia, medicamentos, consulta médica.
+OCIO              → entretenimiento, streaming, videojuegos, viajes.
+ANTOJO            → comida por placer, restaurante, domicilio, dulces, snacks, gaseosas.
+TRANSPORTE        → bus, taxi, Uber, gasolina, peaje.
+TECNOLOGÍA        → celular, computador, TV, electrodomésticos, software.
+ROPA              → ropa, zapatos, accesorios de vestir.
+EDUCACIÓN         → libros, cursos, útiles, matrícula.
+MASCOTAS          → veterinario, concentrado, accesorios mascotas.
 
-PRODUCTOS A CLASIFICAR:
+TEXTO DE LA FACTURA:
 {productos}
 
-Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
+Devuelve ÚNICAMENTE este JSON, sin explicaciones:
 [
-  {{"descripcion": "nombre exacto del producto", "categoria": "NOMBRE_CATEGORIA"}},
+  {{"descripcion": "nombre del artículo", "monto": valor_entero, "descuento": valor_entero_o_0, "categoria": "NOMBRE_CATEGORIA"}},
   ...
 ]"""
 
@@ -234,41 +234,27 @@ def _validar_gastos_manuales(data: Any) -> list:
     return resultado
 
 
-def _unir_items_con_categorias(
-    items_con_monto: list[dict],
-    clasificaciones: list[dict],
-) -> dict[str, float]:
+def _agrupar_por_categoria(clasificaciones: list[dict]) -> dict[str, float]:
     """
-    Une ítems con montos exactos (Python) con categorías del modelo.
-    Matching por descripción — exacto primero, luego parcial, fallback CANASTA.
+    Recibe ítems con monto, descuento y categoria del modelo.
+    Python aplica descuento y agrupa totales por categoría.
     """
-    mapa_cat: dict[str, str] = {}
-    for c in clasificaciones:
-        if isinstance(c, dict):
-            desc = str(c.get("descripcion", "")).strip().lower()
-            cat  = str(c.get("categoria", "")).upper().strip()
-            if desc and cat in CATEGORIAS_VALIDAS:
-                mapa_cat[desc] = cat
-
     categorias: dict[str, float] = {}
-
-    for item in items_con_monto:
-        desc  = str(item.get("descripcion", "")).strip()
-        monto = item.get("monto", 0)
-        if not desc or not monto:
+    for item in clasificaciones:
+        if not isinstance(item, dict):
             continue
-
-        cat = mapa_cat.get(desc.lower())
-        if not cat:
-            for k, v in mapa_cat.items():
-                if k in desc.lower() or desc.lower() in k:
-                    cat = v
-                    break
-        if not cat:
+        cat = str(item.get("categoria", "")).upper().strip()
+        if cat not in CATEGORIAS_VALIDAS:
             cat = "CANASTA"
-
-        categorias[cat] = round(categorias.get(cat, 0.0) + monto, 2)
-
+        try:
+            monto     = float(item.get("monto", 0) or 0)
+            descuento = float(item.get("descuento", 0) or 0)
+            neto      = round(monto - descuento, 2)
+            if neto <= 0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        categorias[cat] = round(categorias.get(cat, 0.0) + neto, 2)
     return categorias
 
 
@@ -329,14 +315,14 @@ class LukaRouter(BaseRouter):
                 if not isinstance(data, list):
                     raise ValueError("El modelo no devolvió una lista de clasificaciones.")
 
-                categorias = _unir_items_con_categorias(items_con_monto, data)
+                categorias = _agrupar_por_categoria(data)
                 if not categorias:
                     raise ValueError("No se pudieron clasificar los ítems.")
 
                 return {
                     "categorias":    categorias,
-                    "comercio":      comercio,
-                    "fecha":         fecha,
+                    "comercio":      None,
+                    "fecha":         None,
                     "total_factura": round(sum(categorias.values()), 2),
                 }
             except ValueError as e:
@@ -377,7 +363,7 @@ class LukaRouter(BaseRouter):
                 if not isinstance(data, list):
                     raise ValueError("El modelo no devolvió una lista de clasificaciones.")
 
-                categorias = _unir_items_con_categorias(items_con_monto, data)
+                categorias = _agrupar_por_categoria(data)
                 if not categorias:
                     raise ValueError("No se pudieron clasificar los ítems.")
 
