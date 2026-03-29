@@ -132,10 +132,20 @@ Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
   ...
 ]"""
 
-PROMPT_TRANSCRIBIR = """Transcribe EXACTAMENTE el contenido de esta factura o recibo.
-Incluye todos los artículos con sus cantidades y valores finales pagados.
-Mantén los números exactamente como aparecen en la imagen, incluyendo puntos y comas.
-No interpretes ni calcules nada. Solo transcribe el texto que ves."""
+PROMPT_TRANSCRIBIR = """De esta factura o recibo, extrae la siguiente información en formato compacto.
+
+COMERCIO: <nombre del comercio o NULO>
+FECHA: <fecha en formato YYYY-MM-DD o NULO>
+
+ARTÍCULOS (una línea por artículo):
+<nombre del artículo>: <valor final en pesos>
+
+Reglas de valores:
+- El punto (.) es separador de miles. Ejemplo: 42.668 → 42668. NUNCA es decimal.
+- Si hay descuento, usa el valor DESPUÉS del descuento.
+- No incluyas subtotales, IVA ni total general.
+- No incluyas códigos de barras ni números de referencia.
+- Solo nombre del producto y valor final pagado."""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers de validación y procesamiento
