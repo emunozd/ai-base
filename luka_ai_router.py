@@ -60,8 +60,8 @@ SYSTEM_PROMPT = (
 # ─────────────────────────────────────────────────────────────────────────────
 
 PROMPT_TRANSCRIBIR = """Transcribe EXACTAMENTE el texto de esta factura o recibo.
-Incluye todos los artículos con sus cantidades y valores.
-Mantén los números exactamente como aparecen: no redondees, no interpretes, no calcules.
+Incluye TODOS los artículos con sus cantidades y VALORES.
+Mantén los números EXACTAMENTE como aparecen: NO redondees, NO interpretes, NO calcules.
 Conserva los puntos y comas tal cual están en la imagen.
 Solo transcribe — no clasifiques ni expliques nada."""
 
@@ -237,6 +237,8 @@ def _validar_gastos_manuales(data: Any) -> list:
 def _agrupar_por_categoria(clasificaciones: list[dict]) -> dict[str, float]:
     """
     Recibe ítems con monto, descuento y categoria del modelo.
+    - Si descuento > monto, están invertidos — los corrige.
+    - Si monto <= 0, descarta el ítem.
     Python aplica descuento y agrupa totales por categoría.
     """
     categorias: dict[str, float] = {}
@@ -249,7 +251,13 @@ def _agrupar_por_categoria(clasificaciones: list[dict]) -> dict[str, float]:
         try:
             monto     = float(item.get("monto", 0) or 0)
             descuento = float(item.get("descuento", 0) or 0)
-            neto      = round(monto - descuento, 2)
+            # Corregir inversión: si descuento > monto, están al revés
+            if descuento > monto and monto > 0:
+                monto, descuento = descuento, monto
+            # Si monto sigue siendo 0 pero descuento tiene valor, usar descuento como monto
+            elif monto == 0 and descuento > 0:
+                monto, descuento = descuento, 0
+            neto = round(monto - descuento, 2)
             if neto <= 0:
                 continue
         except (TypeError, ValueError):
@@ -345,6 +353,10 @@ class LukaRouter(BaseRouter):
 
                 # Python parsea el texto transcrito y aplica descuentos exactamente
                 items_con_monto, comercio, fecha = _parsear_texto_factura(texto_transcrito)
+                # Limpiar comercio — ignorar líneas de cajera/datos personales
+                if comercio and any(x in comercio.lower() for x in 
+                    ["cajera", "cliente", "direcc", "telefo", "email", "barrio"]):
+                    comercio = None
                 if not items_con_monto:
                     raise ValueError("No se pudieron extraer ítems de la imagen.")
 
