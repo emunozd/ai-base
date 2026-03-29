@@ -338,7 +338,7 @@ def _agrupar_por_categoria(
             f"{total_calculado:,.0f}", f"{total_real:,.0f}",
         )
     
-    logger.info("aqui devuelve categorias")
+    #logger.info("aqui devuelve categorias")
     return categorias
 
 
@@ -407,7 +407,7 @@ class LukaRouter(BaseRouter):
                 #logger.info("DATA:\n%s", data)
                 items, comercio, fecha, total_real, cat_comercio = _extraer_resultado(data)
                 categorias = _agrupar_por_categoria(items, total_real, cat_comercio)
-                logger.info("cATEGORIAS:\n%s", categorias)
+                #logger.info("cATEGORIAS:\n%s", categorias)
                 return {
                     "categorias":    categorias,
                     "comercio":      comercio,
