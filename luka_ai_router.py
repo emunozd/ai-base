@@ -295,7 +295,7 @@ class LukaRouter(BaseRouter):
                 texto_transcrito = self.motor.imagen(
                     PROMPT_TRANSCRIBIR,
                     req.imagen_b64,
-                    max_tokens=1200,
+                    max_tokens=2400,
                 )
                 logger.info("TRANSCRIPCIÓN PASADA 1:\n%s", texto_transcrito)
                 if not texto_transcrito.strip():
