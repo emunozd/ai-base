@@ -41,6 +41,13 @@ PROMPT_FACTURA = """Analiza el siguiente contenido de una factura o recibo y cla
 CATEGORÍAS DISPONIBLES (usa exactamente estos nombres):
 HOGAR, CANASTA, MEDICAMENTOS, OCIO, ANTOJO, TRANSPORTE, TECNOLOGÍA, ROPA, EDUCACIÓN, MASCOTAS
 
+REGLAS DE FORMATO NUMÉRICO — MUY IMPORTANTE:
+- Esta es una factura colombiana. El punto (.) es separador de MILES, no decimales.
+- La coma (,) es separador decimal.
+- Ejemplos: 494.498 = 494498 pesos. 1.250.000 = 1250000 pesos. 42.668 = 42668 pesos.
+- NUNCA interpretes el punto como decimal en valores de esta factura.
+- Los totales deben ser números enteros en pesos colombianos (COP), sin puntos ni comas.
+
 REGLAS:
 - CANASTA: mercado del día a día, alimentos básicos, aseo del hogar.
 - ANTOJO: comida por placer, restaurantes, domicilios, dulces, snacks.
