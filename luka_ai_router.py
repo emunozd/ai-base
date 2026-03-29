@@ -26,6 +26,9 @@ from pydantic import BaseModel
 
 from kingsrow_ai_base import BaseRouter, KingsrowAI, MotorInferencia
 
+import logging
+logger = logging.getLogger(__name__)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Constantes LUKA
 # ─────────────────────────────────────────────────────────────────────────────
