@@ -72,11 +72,18 @@ PASO 2 — EXTRAE CADA ARTÍCULO:
 - Los valores con signo "-" al final son descuentos, NO SON precios.
 - NO restes nada, devuelve monto y descuento por separado como enteros.
 
-PASO 3 — VERIFICA ANTES DE RESPONDER:
-REALIZA LA SUMA: (monto - descuento) para cada artículo.
-Si esa suma NO ES al Valor Total del PASO 1, tienes errores.
-CORRIGE los artículos donde confundiste precio con descuento y vuelve a verificar.
-SOLO responde cuando tu suma se aproxime al Valor Total real de la factura.
+PASO 3 — VERIFICACIÓN OBLIGATORIA ANTES DE RESPONDER:
+Calcula: SUMA = (monto₁ - descuento₁) + (monto₂ - descuento₂) + ... para TODOS los artículos.
+Compara esa SUMA con el Valor Total del PASO 1.
+
+Si SUMA NO ES IGUAL O DIFERENTE A Valor Total:
+  - Identifica los artículos donde el monto parece demasiado bajo para lo que es el producto.
+  - Revisa si confundiste el monto con el descuento en esos artículos.
+  - Recuerda: el monto SIEMPRE es el valor más alto. El descuento SIEMPRE es menor.
+  - Corrige y vuelve a calcular la SUMA.
+  - Repite hasta que SUMA ≈ Valor Total.
+
+PROHIBIDO responder si SUMA se aleja más del 5% del Valor Total.
 
 CATEGORÍAS DISPONIBLES (usa exactamente estos nombres):
 HOGAR, HOGAR_ARRIENDO, HOGAR_SERVICIOS, HOGAR_REPARACIONES,
