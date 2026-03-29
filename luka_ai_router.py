@@ -388,7 +388,9 @@ class LukaRouter(BaseRouter):
                     req.imagen_b64,
                     max_tokens=2400,
                 )
+                logger.info("TRANSCRIPCIÓN:\n%s", raw)
                 data  = self.motor.extraer_json(raw)
+                logger.info("DATA:\n%s", data)
                 items, comercio, fecha, total_real, cat_comercio = _extraer_resultado(data)
                 categorias = _agrupar_por_categoria(items, total_real, cat_comercio)
                 return {
@@ -408,7 +410,7 @@ class LukaRouter(BaseRouter):
                 data = self.motor.extraer_json(
                     self.motor.texto(
                         PROMPT_GASTO_MANUAL.format(descripcion=req.descripcion.strip()),
-                        max_tokens=800,
+                        max_tokens=1200,
                     )
                 )
                 return _validar_gastos_manuales(data)
