@@ -14,16 +14,12 @@ Para agregar otro proyecto en el futuro:
     2. Importa y registra esa clase en main.py.
     3. Sus endpoints quedan bajo /otro-proyecto/...
 
-Estrategia de categorización de facturas con imagen:
-    Pasada 1 → modelo transcribe la imagen literalmente (visión pura)
-    Python   → parsea ítems y aplica descuentos (aritmética exacta)
-    Pasada 2 → modelo clasifica cada ítem por nombre (sin tocar montos)
-    Python   → une montos exactos con categorías y agrupa totales
+Estrategia de categorización de facturas con imagen (v3 — directo):
+    Pasada única → modelo de visión lee la imagen y devuelve JSON directamente
+                   [{descripcion, monto, descuento, categoria}]
+    Python       → aplica descuento (monto - descuento) y agrupa totales por categoría
 
-Para facturas de texto el flujo es más directo:
-    Python   → parsea ítems y descuentos del texto
-    Pasada 1 → modelo clasifica cada ítem por nombre
-    Python   → agrupa totales por categoría
+Estrategia anterior (v2 — dos pasadas de texto) está comentada para rollback.
 
 El formato de salida hacia luka-api no cambia en ningún caso.
 """
@@ -56,27 +52,67 @@ SYSTEM_PROMPT = (
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Prompts
+# Prompts v3 — imagen directa a JSON
 # ─────────────────────────────────────────────────────────────────────────────
 
-PROMPT_TRANSCRIBIR = """Transcribe EXACTAMENTE el texto de esta factura o recibo.
-Incluye TODOS los artículos con sus cantidades y VALORES.
-Mantén los números EXACTAMENTE como aparecen: NO redondees, NO interpretes, NO calcules.
-Conserva los puntos y comas tal cual están en la imagen.
-Solo transcribe — no clasifiques ni expliques nada."""
+PROMPT_IMAGEN_DIRECTA = """Analiza esta imagen de factura o recibo.
+Para cada artículo extrae: nombre, monto, descuento y categoría.
 
-PROMPT_CLASIFICAR_ITEMS = """Analiza el texto de esta factura. Para cada artículo devuelve nombre, monto, descuento y categoría.
+REGLAS DE MONTOS — MUY IMPORTANTE:
+- El punto (.) es separador de miles en facturas colombianas. 42.668 = 42668. NUNCA es decimal.
+- "monto" es el precio del artículo antes del descuento, como entero sin separadores.
+- "descuento" es el valor de la línea "Descuento XX% VALOR-" si existe. Sin descuento usa 0.
+- Un descuento SIEMPRE es menor que el monto del artículo.
+- NO restes — devuelve monto y descuento por separado. Python hará la resta.
 
 CATEGORÍAS DISPONIBLES (usa exactamente estos nombres):
 HOGAR, HOGAR_ARRIENDO, HOGAR_SERVICIOS, HOGAR_REPARACIONES,
 CANASTA, CANASTA_VERDURAS, CANASTA_PROTEINA, CANASTA_ASEO, CANASTA_HIGIENE,
 MEDICAMENTOS, OCIO, ANTOJO, TRANSPORTE, TECNOLOGÍA, ROPA, EDUCACIÓN, MASCOTAS
 
+REGLAS DE CATEGORÍA:
+CANASTA_VERDURAS  → frutas, verduras, tubérculos, legumbres frescas.
+CANASTA_PROTEINA  → carnes, pollo, pescado, huevos, lácteos, mantequilla.
+CANASTA_ASEO      → detergente, cloro, limpiapisos, trapero, desinfectante, vinagre limpieza, toallas manos, pañuelos.
+CANASTA_HIGIENE   → shampoo, crema, maquillaje, cuidado facial, jabón baño, aceite corporal, toallas higiénicas.
+CANASTA           → arroz, aceite, sal, azúcar, pasta, enlatados, especias, champiñones. Usar si no encaja arriba.
+HOGAR_ARRIENDO    → arriendo, administración.
+HOGAR_SERVICIOS   → agua, luz, gas, internet, teléfono fijo.
+HOGAR_REPARACIONES → plomería, electricista, pintura, puertas. NUNCA electrodomésticos.
+HOGAR             → hogar sin clasificación clara.
+MEDICAMENTOS      → farmacia, medicamentos, consulta médica.
+OCIO              → entretenimiento, streaming, videojuegos, viajes.
+ANTOJO            → comida por placer, restaurante, domicilio, dulces, snacks, gaseosas.
+TRANSPORTE        → bus, taxi, Uber, gasolina, peaje.
+TECNOLOGÍA        → celular, computador, TV, electrodomésticos, software.
+ROPA              → ropa, zapatos, accesorios de vestir.
+EDUCACIÓN         → libros, cursos, útiles, matrícula.
+MASCOTAS          → veterinario, concentrado, accesorios mascotas.
+
+Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
+{{
+  "comercio": "nombre del comercio o null",
+  "fecha": "YYYY-MM-DD o null",
+  "items": [
+    {{"descripcion": "nombre del artículo", "monto": valor_entero, "descuento": valor_entero_o_0, "categoria": "NOMBRE_CATEGORIA"}},
+    ...
+  ]
+}}"""
+
+PROMPT_TEXTO_DIRECTO = """Analiza el siguiente texto de factura o recibo.
+Para cada artículo extrae: nombre, monto, descuento y categoría.
+
 REGLAS DE MONTOS — MUY IMPORTANTE:
-- El punto (.) es separador de miles. 42.668 = 42668. NUNCA es decimal.
-- "monto" es el valor del artículo tal como aparece en la factura, como número entero sin separadores.
-- "descuento" es el valor que aparece en la línea "Descuento XX% VALOR-" que sigue al artículo. Si no hay descuento usa 0.
-- NO restes nada — devuelve monto y descuento por separado. Python hará la resta.
+- El punto (.) es separador de miles en facturas colombianas. 42.668 = 42668. NUNCA es decimal.
+- "monto" es el precio del artículo antes del descuento, como entero sin separadores.
+- "descuento" es el valor de la línea "Descuento XX% VALOR-" si existe. Sin descuento usa 0.
+- Un descuento SIEMPRE es menor que el monto del artículo.
+- NO restes — devuelve monto y descuento por separado. Python hará la resta.
+
+CATEGORÍAS DISPONIBLES (usa exactamente estos nombres):
+HOGAR, HOGAR_ARRIENDO, HOGAR_SERVICIOS, HOGAR_REPARACIONES,
+CANASTA, CANASTA_VERDURAS, CANASTA_PROTEINA, CANASTA_ASEO, CANASTA_HIGIENE,
+MEDICAMENTOS, OCIO, ANTOJO, TRANSPORTE, TECNOLOGÍA, ROPA, EDUCACIÓN, MASCOTAS
 
 REGLAS DE CATEGORÍA:
 CANASTA_VERDURAS  → frutas, verduras, tubérculos, legumbres frescas.
@@ -98,13 +134,42 @@ EDUCACIÓN         → libros, cursos, útiles, matrícula.
 MASCOTAS          → veterinario, concentrado, accesorios mascotas.
 
 TEXTO DE LA FACTURA:
-{productos}
+{{contenido}}
 
-Devuelve ÚNICAMENTE este JSON, sin explicaciones:
-[
-  {{"descripcion": "nombre del artículo", "monto": valor_entero, "descuento": valor_entero_o_0, "categoria": "NOMBRE_CATEGORIA"}},
-  ...
-]"""
+Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
+{{
+  "comercio": "nombre del comercio o null",
+  "fecha": "YYYY-MM-DD o null",
+  "items": [
+    {{"descripcion": "nombre del artículo", "monto": valor_entero, "descuento": valor_entero_o_0, "categoria": "NOMBRE_CATEGORIA"}},
+    ...
+  ]
+}}"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Prompts v2 — comentados para rollback
+# ─────────────────────────────────────────────────────────────────────────────
+
+# PROMPT_TRANSCRIBIR = """Transcribe EXACTAMENTE el texto de esta factura o recibo.
+# Incluye TODOS los artículos con sus cantidades y VALORES.
+# Mantén los números EXACTAMENTE como aparecen: NO redondees, NO interpretes, NO calcules.
+# Conserva los puntos y comas tal cual están en la imagen.
+# Solo transcribe — no clasifiques ni expliques nada."""
+
+# PROMPT_CLASIFICAR_ITEMS = """Analiza el texto de esta factura. Para cada artículo devuelve
+# nombre, monto, descuento y categoría.
+# [... ver git history para contenido completo ...]
+# TEXTO DE LA FACTURA:
+# {productos}
+# Devuelve ÚNICAMENTE este JSON:
+# [
+#   {"descripcion": "...", "monto": valor_entero, "descuento": valor_entero_o_0, "categoria": "..."},
+#   ...
+# ]"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Prompt gastos manuales — sin cambios
+# ─────────────────────────────────────────────────────────────────────────────
 
 PROMPT_GASTO_MANUAL = """El usuario describió uno o varios gastos con sus propias palabras. Extrae TODOS los gastos mencionados.
 
@@ -148,68 +213,7 @@ Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Parser de texto de factura — Python hace la aritmética
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _parsear_texto_factura(texto: str) -> tuple[list[dict], str | None, str | None]:
-    lineas = texto.strip().split("\n")
-    items = []
-    comercio = "Comercio Desconocido"
-    fecha = None
-
-    # 1. Regex específicos
-    # Busca: Inicio de línea con número + cualquier cosa + espacio + Monto (X.XXX o XX.XXX)
-    pat_item = re.compile(r"^\d+\s+.*?\s+([\d]{1,3}(?:\.[\d]{3})+)$")
-    pat_desc = re.compile(r"[Dd]escuento\s+[\d,\.]+\s*%\s+([\d\.]+)-?")
-    
-    # 2. Detectar Comercio y Fecha
-    for linea in lineas[:15]:
-        linea_s = linea.strip()
-        if not fecha:
-            m_f = re.search(r"(\d{4}[/\-]\d{2}[/\-]\d{2})", linea_s)
-            if m_f: fecha = m_f.group(1).replace("/", "-")
-        
-        # El comercio suele ser la primera línea relevante que no sea "Factura..."
-        if comercio == "Comercio Desconocido" and len(linea_s) > 5:
-            if not re.search(r"(Factura|Pedido|Caja|Fecha|Cliente|Direcc|#)", linea_s, re.I):
-                comercio = linea_s
-
-    item_actual = None
-
-    for linea in lineas:
-        linea_s = linea.strip()
-        if not linea_s or any(x in linea_s for x in ["Subtotal", "Total IVA", "Valor Total"]):
-            continue
-
-        # ¿Es una línea de ítem? (Ej: 8 240062700000 0 0 6,86 115.316)
-        m_item = pat_item.match(linea_s)
-        if m_item:
-            if item_actual: items.append(item_actual)
-            
-            monto = int(m_item.group(1).replace(".", ""))
-            item_actual = {"descripcion": "", "monto": monto}
-            continue
-
-        # ¿Es una línea de descuento?
-        m_desc = pat_desc.search(linea_s)
-        if m_desc and item_actual:
-            desc_val = int(m_desc.group(1).replace(".", ""))
-            item_actual["monto"] = max(0, item_actual["monto"] - desc_val)
-            continue
-
-        # Si tenemos un ítem pero no tiene descripción, esta línea lo es
-        if item_actual and not item_actual["descripcion"]:
-            # Filtramos que no sea una línea de puros números o etiquetas conocidas
-            if not re.match(r"^[0-9\s,.-]+$", linea_s) and len(linea_s) > 2:
-                item_actual["descripcion"] = linea_s
-
-    if item_actual: items.append(item_actual)
-
-    return items, comercio, fecha
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers de validación y procesamiento
+# Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _validar_gastos_manuales(data: Any) -> list:
@@ -234,15 +238,14 @@ def _validar_gastos_manuales(data: Any) -> list:
     return resultado
 
 
-def _agrupar_por_categoria(clasificaciones: list[dict]) -> dict[str, float]:
+def _agrupar_por_categoria(items: list[dict]) -> dict[str, float]:
     """
-    Recibe ítems con monto, descuento y categoria del modelo.
-    - Si descuento > monto, están invertidos — los corrige.
-    - Si monto <= 0, descarta el ítem.
+    Recibe ítems con monto, descuento y categoria.
+    Corrige inversión si descuento > monto.
     Python aplica descuento y agrupa totales por categoría.
     """
     categorias: dict[str, float] = {}
-    for item in clasificaciones:
+    for item in items:
         if not isinstance(item, dict):
             continue
         cat = str(item.get("categoria", "")).upper().strip()
@@ -251,10 +254,8 @@ def _agrupar_por_categoria(clasificaciones: list[dict]) -> dict[str, float]:
         try:
             monto     = float(item.get("monto", 0) or 0)
             descuento = float(item.get("descuento", 0) or 0)
-            # Corregir inversión: si descuento > monto, están al revés
             if descuento > monto and monto > 0:
                 monto, descuento = descuento, monto
-            # Si monto sigue siendo 0 pero descuento tiene valor, usar descuento como monto
             elif monto == 0 and descuento > 0:
                 monto, descuento = descuento, 0
             neto = round(monto - descuento, 2)
@@ -264,6 +265,18 @@ def _agrupar_por_categoria(clasificaciones: list[dict]) -> dict[str, float]:
             continue
         categorias[cat] = round(categorias.get(cat, 0.0) + neto, 2)
     return categorias
+
+
+def _extraer_resultado(data: Any) -> tuple[list, str | None, str | None]:
+    """Extrae items, comercio y fecha del JSON devuelto por el modelo."""
+    if isinstance(data, list):
+        return data, None, None
+    if isinstance(data, dict):
+        comercio = data.get("comercio") or None
+        fecha    = data.get("fecha") or None
+        items    = data.get("items") or []
+        return items, comercio, fecha
+    return [], None, None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -291,12 +304,6 @@ class LukaRouter(BaseRouter):
         KR_HOST:KR_PORT/luka/categorizar-factura-texto
         KR_HOST:KR_PORT/luka/categorizar-factura-imagen
         KR_HOST:KR_PORT/luka/categorizar-gasto-manual
-
-    Nota Docker Desktop: Docker Desktop en Mac enruta tráfico saliente
-    de contenedores a través de la red del host. Los contenedores pueden
-    alcanzar KR_HOST:KR_PORT directamente. NO usar host.docker.internal
-    aquí porque ese alias apunta a 127.0.0.1 del host, y el servidor ya
-    no escucha en 127.0.0.1.
     """
 
     prefix = "/luka"
@@ -308,29 +315,18 @@ class LukaRouter(BaseRouter):
             if not req.texto.strip():
                 raise HTTPException(status_code=422, detail="El texto no puede estar vacío.")
             try:
-                # Python parsea el texto y aplica descuentos exactamente
-                items_con_monto, comercio, fecha = _parsear_texto_factura(req.texto.strip())
-                if not items_con_monto:
-                    raise ValueError("No se pudieron extraer ítems del texto.")
-
-                # Modelo solo clasifica por nombre
-                lista_productos = "\n".join(
-                    f"- {item['descripcion']}" for item in items_con_monto
-                )
-                prompt = PROMPT_CLASIFICAR_ITEMS.format(productos=lista_productos)
-                raw    = self.motor.texto(prompt, max_tokens=800)
+                prompt = PROMPT_TEXTO_DIRECTO.replace("{{contenido}}", req.texto.strip())
+                raw    = self.motor.texto(prompt, max_tokens=1200)
+                logger.info("RESPUESTA TEXTO DIRECTO:\n%s", raw)
                 data   = self.motor.extraer_json(raw)
-                if not isinstance(data, list):
-                    raise ValueError("El modelo no devolvió una lista de clasificaciones.")
-
-                categorias = _agrupar_por_categoria(data)
+                items, comercio, fecha = _extraer_resultado(data)
+                categorias = _agrupar_por_categoria(items)
                 if not categorias:
                     raise ValueError("No se pudieron clasificar los ítems.")
-
                 return {
                     "categorias":    categorias,
-                    "comercio":      None,
-                    "fecha":         None,
+                    "comercio":      comercio,
+                    "fecha":         fecha,
                     "total_factura": round(sum(categorias.values()), 2),
                 }
             except ValueError as e:
@@ -341,48 +337,48 @@ class LukaRouter(BaseRouter):
             if not req.imagen_b64.strip():
                 raise HTTPException(status_code=422, detail="La imagen no puede estar vacía.")
             try:
-                # Pasada 1 — transcripción literal de la imagen
-                texto_transcrito = self.motor.imagen(
-                    PROMPT_TRANSCRIBIR,
+                # ── v3: modelo de visión → JSON directo ───────────────────────
+                raw = self.motor.imagen(
+                    PROMPT_IMAGEN_DIRECTA,
                     req.imagen_b64,
                     max_tokens=2400,
                 )
-                if not texto_transcrito.strip():
-                    raise ValueError("No se pudo transcribir el contenido de la imagen.")
-                logger.info("TRANSCRIPCIÓN PASADA 1:\n%s", texto_transcrito)
-
-                # Python parsea el texto transcrito y aplica descuentos exactamente
-                items_con_monto, comercio, fecha = _parsear_texto_factura(texto_transcrito)
-                # Limpiar comercio — ignorar líneas de cajera/datos personales
-                if comercio and any(x in comercio.lower() for x in 
-                    ["cajera", "cliente", "direcc", "telefo", "email", "barrio"]):
-                    comercio = None
-                if not items_con_monto:
-                    raise ValueError("No se pudieron extraer ítems de la imagen.")
-
-                #logger.info("Ítems parseados: %d — total Python: $%s", len(items_con_monto), f"{sum(i['monto'] for i in items_con_monto):,.0f}")
-
-                # Pasada 2 — modelo solo clasifica por nombre de producto
-                lista_productos = "\n".join(
-                    f"- {item['descripcion']}" for item in items_con_monto
-                )
-                prompt = PROMPT_CLASIFICAR_ITEMS.format(productos=texto_transcrito.strip())
-                raw    = self.motor.texto(prompt, max_tokens=2400)
-                logger.info("CLASIFICACIÓN PASADA 2:\n%s", raw)
-                data   = self.motor.extraer_json(raw)
-                if not isinstance(data, list):
-                    raise ValueError("El modelo no devolvió una lista de clasificaciones.")
-
-                categorias = _agrupar_por_categoria(data)
+                logger.info("RESPUESTA IMAGEN DIRECTA:\n%s", raw)
+                data  = self.motor.extraer_json(raw)
+                items, comercio, fecha = _extraer_resultado(data)
+                categorias = _agrupar_por_categoria(items)
                 if not categorias:
                     raise ValueError("No se pudieron clasificar los ítems.")
-
                 return {
                     "categorias":    categorias,
                     "comercio":      comercio,
                     "fecha":         fecha,
                     "total_factura": round(sum(categorias.values()), 2),
                 }
+                # ── ROLLBACK v2: descomentar bloque y comentar v3 ─────────────
+                # texto_transcrito = self.motor.imagen(
+                #     PROMPT_TRANSCRIBIR, req.imagen_b64, max_tokens=2400,
+                # )
+                # if not texto_transcrito.strip():
+                #     raise ValueError("No se pudo transcribir el contenido de la imagen.")
+                # logger.info("TRANSCRIPCIÓN PASADA 1:\n%s", texto_transcrito)
+                # prompt = PROMPT_CLASIFICAR_ITEMS.format(productos=texto_transcrito.strip())
+                # raw    = self.motor.texto(prompt, max_tokens=2400)
+                # logger.info("CLASIFICACIÓN PASADA 2:\n%s", raw)
+                # data   = self.motor.extraer_json(raw)
+                # if not isinstance(data, list):
+                #     raise ValueError("El modelo no devolvió una lista de clasificaciones.")
+                # categorias = _agrupar_por_categoria(data)
+                # if not categorias:
+                #     raise ValueError("No se pudieron clasificar los ítems.")
+                # return {
+                #     "categorias":    categorias,
+                #     "comercio":      None,
+                #     "fecha":         None,
+                #     "total_factura": round(sum(categorias.values()), 2),
+                # }
+                # ── FIN ROLLBACK v2 ───────────────────────────────────────────
+
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
 
