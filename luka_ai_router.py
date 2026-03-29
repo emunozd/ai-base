@@ -58,19 +58,25 @@ SYSTEM_PROMPT = (
 PROMPT_IMAGEN_DIRECTA = """Analiza esta imagen de factura o recibo.
 Para cada artículo extrae: nombre, monto, descuento y categoría.
 
-REGLAS DE MONTOS — MUY IMPORTANTE:
-- El punto (.) es separador de miles en facturas colombianas. 42.668 = 42668. NUNCA es decimal.
+PASO 1 — LEE EL VALOR TOTAL:
+Busca el "Valor Total" o "Total" o similares al final de la factura y memorízalo.
+Ese es el valor de referencia que SIEMPRE DEBES respetar.
+
+PASO 2 — EXTRAE CADA ARTÍCULO:
 - "monto" es el precio del artículo antes de cualquier descuento, como entero sin separadores.
-- "descuento" es el valor rebajado si hay una línea de descuento asociada al artículo. Sin descuento usa 0.
-- UN DESCUENTO SIEMPRE ES MENOR QUE EL PRECIO ORIGINAL. Si encuentras dos valores asociados a un artículo
-  donde uno es mayor y otro menor, el MAYOR es el monto y el MENOR es el descuento — sin excepción.
+- "descuento" es el valor de la línea de descuento asociada al artículo. Sin descuento usa 0.
+- El punto (.) es separador de miles. 42.668 = 42668. NUNCA es decimal.
+- UN DESCUENTO SIEMPRE ES MENOR QUE EL MONTO DEL MISMO ARTÍCULO.
+  Si tienes dos valores y uno es mayor que el otro, el MAYOR es SIEMPRE el monto.
 - Cada descuento pertenece ÚNICAMENTE al artículo que lo precede inmediatamente.
-  Un valor grande NO puede ser el descuento de un artículo de precio pequeño.
-- Los valores con signo "-" al final son descuentos, no precios.
-- La suma de (monto - descuento) de todos los artículos debe SER IGUAL al VALOR TOTAL
-  que aparece al final de la factura. Si tu suma se aleja mucho del Valor Total indicado,
-  DEBES REVISAR los artículos donde confundiste precio con descuento y CORREGIRLOS antes de responder.
-- NO restes nada — devuelve monto y descuento por separado como enteros.
+- Los valores con signo "-" al final son descuentos, NO SON precios.
+- NO restes nada, devuelve monto y descuento por separado como enteros.
+
+PASO 3 — VERIFICA ANTES DE RESPONDER:
+REALIZA LA SUMA: (monto - descuento) para cada artículo.
+Si esa suma NO ES al Valor Total del PASO 1, tienes errores.
+CORRIGE los artículos donde confundiste precio con descuento y vuelve a verificar.
+SOLO responde cuando tu suma se aproxime al Valor Total real de la factura.
 
 CATEGORÍAS DISPONIBLES (usa exactamente estos nombres):
 HOGAR, HOGAR_ARRIENDO, HOGAR_SERVICIOS, HOGAR_REPARACIONES,
@@ -100,6 +106,7 @@ Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
 {{
   "comercio": "nombre del comercio o null",
   "fecha": "YYYY-MM-DD o null",
+  "total_factura": valor_total_real_de_la_factura,
   "items": [
     {{"descripcion": "nombre del artículo", "monto": valor_entero, "descuento": valor_entero_o_0, "categoria": "NOMBRE_CATEGORIA"}},
     ...
