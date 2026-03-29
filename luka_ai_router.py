@@ -293,7 +293,7 @@ class LukaRouter(BaseRouter):
                 texto_transcrito = self.motor.imagen(
                     PROMPT_TRANSCRIBIR,
                     req.imagen_b64,
-                    max_tokens=1200,
+                    max_tokens=800,
                 )
                 if not texto_transcrito.strip():
                     raise ValueError("No se pudo transcribir el contenido de la imagen.")
