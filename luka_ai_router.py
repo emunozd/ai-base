@@ -277,7 +277,7 @@ class LukaRouter(BaseRouter):
                     contenido=f"TEXTO DE LA FACTURA:\n{req.texto.strip()}"
                 )
                 # max_tokens aumentado: ahora el modelo devuelve un ítem por línea
-                raw  = self.motor.texto(prompt, max_tokens=1200)
+                raw  = self.motor.texto(prompt, max_tokens=800)
                 data = self.motor.extraer_json(raw)
                 items, comercio, fecha = _extraer_meta_factura(data)
                 return _procesar_items_factura(items, comercio, fecha)
@@ -293,7 +293,7 @@ class LukaRouter(BaseRouter):
                 texto_transcrito = self.motor.imagen(
                     PROMPT_TRANSCRIBIR,
                     req.imagen_b64,
-                    max_tokens=800,
+                    max_tokens=400,
                 )
                 if not texto_transcrito.strip():
                     raise ValueError("No se pudo transcribir el contenido de la imagen.")
