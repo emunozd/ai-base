@@ -147,7 +147,7 @@ Devuelve:
 
 Reglas CRÍTICAS:
 - Para TABLA_NUTRICIONAL: copia los números EXACTAMENTE como aparecen en la etiqueta. NO los inventes.
-- Si el campo "Número de porciones por envase" dice 5, pon 5 en porciones_por_envase.
+- Tamaño de porcion es DIFERENTE a numero de porciones por envase, captura únicamente el NUMERO DE PORCIONES POR ENVASE o NUMERO DE PORCIONES y si el campo dice 5, pon 5 en porciones_por_envase.
 - Si el campo "Por porción" dice 45, pon 45 en kcal_por_porcion.
 - Si el líquido en el recipiente NO es agua pura, NUNCA pongas 0 kcal.
 - Yogur, kéfir, jugos, batidos, leches vegetales SIEMPRE tienen calorías.
