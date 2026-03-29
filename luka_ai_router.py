@@ -277,33 +277,33 @@ def _agrupar_por_categoria(
     categorias: dict[str, float] = {}
 
     for item in items:
-        logger.info("EN EL FOR")
+        #logger.info("EN EL FOR")
         if not isinstance(item, dict):
             continue
         cat = str(item.get("categoria", "")).upper().strip()
-        logger.info("CAT:\n%s", cat)
+        #logger.info("CAT:\n%s", cat)
         if cat not in CATEGORIAS_VALIDAS:
             cat = "CANASTA"
         try:
-            logger.info("TRY")
+            #logger.info("TRY")
             monto     = float(item.get("monto", 0) or 0)
-            logger.info("monto:\n%s", monto)
+            #logger.info("monto:\n%s", monto)
             descuento = float(item.get("descuento", 0) or 0)
-            logger.info("descuento:\n%s", descuento)
+            #logger.info("descuento:\n%s", descuento)
             # Corregir inversión: el descuento nunca puede ser mayor que el monto
             if descuento > monto and monto > 0:
                 monto, descuento = descuento, monto
             elif monto == 0 and descuento > 0:
                 monto, descuento = descuento, 0
             neto = round(monto - descuento, 2)
-            logger.info("neto:\n%s", neto)
+            #logger.info("neto:\n%s", neto)
             if neto <= 0:
                 continue
         except (TypeError, ValueError):
             continue
-        logger.info("despues try")
+        #logger.info("despues try")
         categorias[cat] = round(categorias.get(cat, 0.0) + neto, 2)
-        logger.info("categorias[cat]:\n%s", categorias[cat])
+        #logger.info("categorias[cat]:\n%s", categorias[cat])
 
     if not categorias:
         raise ValueError("No se pudieron clasificar los ítems.")
@@ -315,9 +315,10 @@ def _agrupar_por_categoria(
     total_calculado = round(sum(categorias.values()), 2)
     diferencia      = round(total_real - total_calculado, 2)
     tolerancia      = round(total_real * TOLERANCIA_PCT, 2)
-    logger.info("total_calculado:\n%s", total_calculado)
+    #logger.info("total_calculado:\n%s", total_calculado)
     # Suma mayor que el total real con margen significativo → warning al usuario
     if diferencia < -tolerancia:
+        logger.info("error debido a diferencia mejor a tolerancia")
         raise ValueError(
             f"Hubo un problema analizando la foto de la factura. "
             f"Intenta de nuevo con una imagen más clara."
@@ -326,14 +327,15 @@ def _agrupar_por_categoria(
     # Suma menor que el total real → agregar diferencia en categoría del comercio
     if diferencia > tolerancia:
         cat_ajuste = cat_comercio if cat_comercio in CATEGORIAS_VALIDAS else "CANASTA"
-        logger.info("agregando diff a comercioo:\n%s", cat_ajuste)
+        #logger.info("agregando diff a comercioo:\n%s", cat_ajuste)
         categorias[cat_ajuste] = round(categorias.get(cat_ajuste, 0.0) + diferencia, 2)
         logger.info(
             "Diferencia $%s agregada a %s (calculado: $%s → real: $%s)",
             f"{diferencia:,.0f}", cat_ajuste,
             f"{total_calculado:,.0f}", f"{total_real:,.0f}",
         )
-
+    
+    logger.info("aqui devuelve categorias")
     return categorias
 
 
