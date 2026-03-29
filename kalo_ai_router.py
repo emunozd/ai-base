@@ -121,25 +121,25 @@ Primero determina qué tipo de imagen es:
 CASO A — Es un plato, alimento o bebida:
 Usa el cubierto (tenedor/cuchillo) como referencia de tamaño si está presente.
 Devuelve:
-{{
+{
   "tipo": "PLATO",
   "descripcion": "descripción del alimento/plato y componentes",
   "kcal_estimadas": total_entero,
   "confianza": "ALTA | MEDIA | BAJA",
   "detalle": "Componente 1 ~Xkcal, Componente 2 ~Ykcal"
-}}
+}
 
 CASO B — Es una tabla nutricional (etiqueta de producto):
 Lee los valores de la tabla con precisión.
 Devuelve:
-{{
+{
   "tipo": "TABLA_NUTRICIONAL",
   "producto": "nombre del producto si es legible",
   "kcal_por_porcion": numero_entero,
   "porcion_g": numero_o_null,
   "porciones_por_envase": numero_o_null,
   "kcal_total_envase": numero_o_null
-}}
+}
 
 Reglas CRÍTICAS:
 - Si el líquido en el recipiente NO es agua pura, NUNCA pongas 0 kcal.
