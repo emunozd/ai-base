@@ -392,7 +392,9 @@ class LukaRouter(BaseRouter):
                 data  = self.motor.extraer_json(raw)
                 #logger.info("DATA:\n%s", data)
                 items, comercio, fecha, total_real, cat_comercio = _extraer_resultado(data)
-                logger.info("PASA EXTRAER RESULTADOS")
+                logger.info("Items:\n%s", items)
+                logger.info("total real:\n%s", total_real)
+                logger.info("categoria comercio:\n%s", cat_comercio)
                 categorias = _agrupar_por_categoria(items, total_real, cat_comercio)
                 logger.info("cATEGORIAS:\n%s", categorias)
                 return {
