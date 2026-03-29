@@ -1,92 +1,168 @@
 """
 kalo_ai_router.py — Router de inferencia IA para KALO
 ======================================================
-Clase hija de BaseRouter que define los endpoints de KALO:
-  POST /kalo/analizar-foto-comida     — estima calorías desde una imagen
-  POST /kalo/interpretar-texto        — interpreta texto libre del usuario
-  POST /kalo/sugerencia-nutricional   — consejo según el balance del día
+Endpoints:
+  POST /kalo/clasificar-intent       — detecta si es comida, ejercicio u otro
+  POST /kalo/inferir-comida          — infiere kcal de texto libre de comida
+  POST /kalo/inferir-ejercicio       — infiere kcal de texto libre de ejercicio
+  POST /kalo/analizar-foto-comida    — estima kcal desde foto (plato o tabla nutricional)
+  POST /kalo/sugerencia-nutricional  — consejo según balance del día
 
-Este archivo NO es el punto de entrada del servidor.
-El servidor se levanta desde main.py — ese es el único LaunchDaemon.
+Flujo de texto libre en el bot:
+  texto → /clasificar-intent → COMIDA → /inferir-comida → confirmación → guardar
+                              → EJERCICIO → /inferir-ejercicio → confirmación → guardar
+                              → CONSULTA → mostrar resumen
+                              → OTRO → respuesta genérica
 
-Para registrar en main.py:
-    from kalo_ai_router import KaloRouter
-    KaloRouter(motor, app)
+Flujo de foto:
+  imagen → /analizar-foto-comida → detecta PLATO o TABLA_NUTRICIONAL
+         → si TABLA: pide porciones consumidas → calcula kcal → confirmación → guardar
+         → si PLATO: muestra estimado → confirmación → guardar
 """
+
+from typing import Optional
 
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from kingsrow_ai_base import BaseRouter, KingsrowAI, MotorInferencia
+from kingsrow_ai_base import BaseRouter, MotorInferencia
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Prompts
 # ─────────────────────────────────────────────────────────────────────────────
 
-SYSTEM_BASE = (
-    "Eres KALO, el asistente nutricional personal de una app de seguimiento calórico para colombianos. "
-    "Responde SIEMPRE en español. NUNCA uses otro idioma. "
-    "Sé directo, amigable y motivador. "
-    "NUNCA inventes datos que el usuario no haya proporcionado. "
-    "SOLO devuelve el JSON solicitado, sin texto adicional, sin backticks, sin markdown."
-)
+# ── 1. Clasificador de intent ─────────────────────────────────────────────────
+PROMPT_INTENT = """El usuario de una app de seguimiento calórico escribió:
+"{texto}"
 
-PROMPT_FOTO = """Analiza la imagen de este plato de comida.
-Si hay un cubierto (tenedor o cuchillo) úsalo como referencia de tamaño para estimar las porciones.
-
-Devuelve ÚNICAMENTE este JSON:
+Clasifica de qué se trata. Devuelve ÚNICAMENTE este JSON:
 {{
-  "descripcion": "descripción breve del plato y sus componentes",
-  "kcal_estimadas": total_calorias_entero,
-  "confianza": "ALTA",
-  "detalle": "Arroz blanco ~200kcal, pollo ~180kcal, ensalada ~70kcal"
+  "intent": "COMIDA | EJERCICIO | CONSULTA | OTRO",
+  "confianza": "ALTA | MEDIA | BAJA"
 }}
 
 Reglas:
-- confianza: ALTA (alimentos claramente visibles), MEDIA (parcialmente visible o ambiguo), BAJA (muy difícil de determinar).
-- kcal_estimadas: número entero, calorías totales del plato visible.
-- detalle: desglose breve por componente con kcal aproximadas.
-- Si no hay cubierto de referencia, asume porción estándar colombiana y baja confianza a MEDIA.
-- Si la imagen no es de comida, devuelve kcal_estimadas: 0 y confianza: BAJA."""
+- COMIDA: menciona algo que comió, bebió, o quiere registrar como alimento (incluso bebidas, suplementos, batidos, yogur, kéfir, proteína).
+- EJERCICIO: menciona actividad física, distancia, pasos, tiempo de entrenamiento, calorías quemadas.
+- CONSULTA: pregunta por su balance, progreso, cuánto le queda, sugerencias.
+- OTRO: cualquier cosa fuera de contexto nutricional/fitness."""
 
-PROMPT_TEXTO = """El usuario de una app de seguimiento calórico escribió esto libremente:
+
+# ── 2. Inferir calorías de comida ─────────────────────────────────────────────
+PROMPT_INFERIR_COMIDA = """El usuario describió lo que comió o bebió:
 "{texto}"
 
-Contexto del usuario hoy:
-- Calorías objetivo: {objetivo} kcal
-- Calorías consumidas: {consumidas} kcal
-- Calorías quemadas por ejercicio: {quemadas} kcal
-- Calorías disponibles: {disponibles} kcal
-
-Tu tarea es interpretar qué quiere hacer el usuario y extraer los datos relevantes.
+Eres un nutricionista experto en alimentación colombiana y latinoamericana.
+Infiere las calorías aproximadas basándote en:
+- Las porciones mencionadas (medio pocillo ≈ 125ml, pocillo ≈ 250ml, cucharada ≈ 15g, taza ≈ 240ml)
+- Base de datos nutricional estándar
+- Si es mezcla de ingredientes, suma cada componente por separado
 
 Devuelve ÚNICAMENTE este JSON:
 {{
-  "intent": "REGISTRAR_COMIDA | REGISTRAR_EJERCICIO | CONSULTAR_BALANCE | PEDIR_SUGERENCIA | OTRO",
-  "descripcion": "qué identificaste que quiere hacer",
-  "kcal": numero_o_null,
-  "alimento": "nombre del alimento si aplica o null",
-  "ejercicio": "nombre del ejercicio si aplica o null",
-  "duracion_min": numero_o_null,
-  "respuesta_directa": "respuesta conversacional al usuario en 1-2 oraciones"
-}}"""
+  "descripcion": "descripción clara del alimento o preparación",
+  "kcal": numero_entero_aproximado,
+  "detalle": "Ingrediente 1 ~Xkcal, Ingrediente 2 ~Ykcal, ...",
+  "confianza": "ALTA | MEDIA | BAJA",
+  "nota": "aclaración si la porción fue ambigua, o null"
+}}
 
-PROMPT_SUGERENCIA = """El usuario lleva el siguiente balance calórico hoy:
-- Objetivo diario: {objetivo} kcal
+Reglas CRÍTICAS:
+- NUNCA devuelvas 0 kcal a menos que sea agua pura o algo sin calorías comprobado.
+- Yogur kéfir entero 125ml ≈ 75-90 kcal.
+- Batido proteína (1 scoop ≈ 30g) ≈ 120 kcal, crema de maní 1 cucharada ≈ 95 kcal.
+- Si la porción es ambigua, usa una porción estándar colombiana y baja confianza a MEDIA.
+- Sé conservador pero nunca cero en alimentos que claramente tienen calorías."""
+
+
+# ── 3. Inferir calorías de ejercicio ─────────────────────────────────────────
+PROMPT_INFERIR_EJERCICIO = """El usuario describió una actividad física:
+"{texto}"
+
+Datos del usuario:
+- Peso: {peso_kg} kg
+- Edad: {edad} años
+
+Infiere las calorías quemadas. Si el usuario ya dio las kcal, úsalas directamente.
+Si dio distancia, tiempo o pasos, calcula usando MET estándar y el peso del usuario.
+
+Referencias MET (kcal = MET × peso_kg × horas):
+- Caminar normal: MET 3.5 | 10.000 pasos ≈ 7-8 km
+- Correr 8-10 km/h: MET 8.0
+- Correr >10 km/h: MET 10.0
+- Pesas moderado: MET 4.0
+- Pesas intenso: MET 6.0
+- Bicicleta moderada: MET 6.0
+- Yoga/stretching: MET 2.5
+- HIIT: MET 8.0
+
+Devuelve ÚNICAMENTE este JSON:
+{{
+  "descripcion": "descripción clara del ejercicio",
+  "kcal_quemadas": numero_entero_aproximado,
+  "duracion_min": numero_entero_o_null,
+  "distancia_km": numero_decimal_o_null,
+  "confianza": "ALTA | MEDIA | BAJA",
+  "nota": "supuestos usados para el cálculo, o null"
+}}
+
+Reglas:
+- Si el usuario dio kcal explícitamente → confianza ALTA, úsalas sin modificar.
+- Si calculaste por distancia/pasos → indica en nota cómo lo calculaste.
+- duracion_min: null si no se mencionó ni puede inferirse."""
+
+
+# ── 4. Análisis de foto (plato O tabla nutricional) ───────────────────────────
+PROMPT_FOTO = """Analiza esta imagen con cuidado.
+
+Primero determina qué tipo de imagen es:
+
+CASO A — Es un plato, alimento o bebida:
+Usa el cubierto (tenedor/cuchillo) como referencia de tamaño si está presente.
+Devuelve:
+{{
+  "tipo": "PLATO",
+  "descripcion": "descripción del alimento/plato y componentes",
+  "kcal_estimadas": total_entero,
+  "confianza": "ALTA | MEDIA | BAJA",
+  "detalle": "Componente 1 ~Xkcal, Componente 2 ~Ykcal"
+}}
+
+CASO B — Es una tabla nutricional (etiqueta de producto):
+Lee los valores de la tabla con precisión.
+Devuelve:
+{{
+  "tipo": "TABLA_NUTRICIONAL",
+  "producto": "nombre del producto si es legible",
+  "kcal_por_porcion": numero_entero,
+  "porcion_g": numero_o_null,
+  "porciones_por_envase": numero_o_null,
+  "kcal_total_envase": numero_o_null
+}}
+
+Reglas CRÍTICAS:
+- Si el líquido en el recipiente NO es agua pura, NUNCA pongas 0 kcal.
+- Yogur, kéfir, jugos, batidos, leches vegetales SIEMPRE tienen calorías.
+- Un pocillo de yogur kéfir ≈ 75-150 kcal dependiendo del tipo.
+- Si no puedes identificar bien el alimento, da un estimado razonable y baja confianza a BAJA.
+- Para TABLA_NUTRICIONAL: lee los números tal como aparecen en la etiqueta."""
+
+
+# ── 5. Sugerencia nutricional ─────────────────────────────────────────────────
+PROMPT_SUGERENCIA = """Balance calórico del usuario hoy:
+- Objetivo: {objetivo} kcal
 - Consumidas: {consumidas} kcal
-- Quemadas (ejercicio): {quemadas} kcal
+- Quemadas ejercicio: {quemadas} kcal
 - Disponibles: {disponibles} kcal
-- Hora del día: {hora}
-- Comidas registradas hoy: {comidas}
-
-Genera una sugerencia nutricional personalizada, práctica y motivadora.
+- Hora: {hora}
+- Registros: {comidas}
 
 Devuelve ÚNICAMENTE este JSON:
 {{
-  "mensaje": "sugerencia principal en 2-3 oraciones",
-  "opciones": ["opción de comida 1", "opción de comida 2", "opción de comida 3"],
-  "advertencia": "texto de advertencia si las calorías están muy desbalanceadas, o null"
+  "mensaje": "sugerencia práctica y motivadora en 2-3 oraciones",
+  "opciones": ["opción comida 1", "opción comida 2", "opción comida 3"],
+  "advertencia": "advertencia si hay desbalance grave, o null"
 }}"""
 
 
@@ -94,17 +170,20 @@ Devuelve ÚNICAMENTE este JSON:
 # Modelos de request
 # ─────────────────────────────────────────────────────────────────────────────
 
-class FotoComidaRequest(BaseModel):
-    imagen_b64: str
-
-
-class TextoLibreRequest(BaseModel):
+class IntentRequest(BaseModel):
     texto: str
-    objetivo: float = 2000
-    consumidas: float = 0
-    quemadas: float = 0
-    disponibles: float = 2000
 
+class InferirComidaRequest(BaseModel):
+    texto: str
+
+class InferirEjercicioRequest(BaseModel):
+    texto: str
+    peso_kg: float = 70.0
+    edad: int = 30
+
+class FotoRequest(BaseModel):
+    imagen_b64: str
+    porciones_consumidas: Optional[float] = None
 
 class SugerenciaRequest(BaseModel):
     objetivo: float
@@ -116,52 +195,98 @@ class SugerenciaRequest(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helpers de validación
+# Validadores
 # ─────────────────────────────────────────────────────────────────────────────
 
-INTENTS_VALIDOS = {
-    "REGISTRAR_COMIDA", "REGISTRAR_EJERCICIO",
-    "CONSULTAR_BALANCE", "PEDIR_SUGERENCIA", "OTRO",
-}
+INTENTS_VALIDOS = {"COMIDA", "EJERCICIO", "CONSULTA", "OTRO"}
+CONFIANZAS      = {"ALTA", "MEDIA", "BAJA"}
 
-def _validar_foto(data: dict) -> dict:
+
+def _v_intent(data: dict) -> dict:
+    intent = str(data.get("intent", "OTRO")).upper().strip()
+    if intent not in INTENTS_VALIDOS:
+        intent = "OTRO"
+    confianza = str(data.get("confianza", "MEDIA")).upper().strip()
+    if confianza not in CONFIANZAS:
+        confianza = "MEDIA"
+    return {"intent": intent, "confianza": confianza}
+
+
+def _v_comida(data: dict) -> dict:
+    try:
+        kcal = int(float(data.get("kcal", 0)))
+    except (TypeError, ValueError):
+        raise ValueError("kcal debe ser un número.")
+    if kcal <= 0:
+        raise ValueError("El modelo devolvió 0 kcal — revisar descripción.")
+    confianza = str(data.get("confianza", "MEDIA")).upper().strip()
+    if confianza not in CONFIANZAS:
+        confianza = "MEDIA"
+    return {
+        "descripcion": str(data.get("descripcion", "")).strip(),
+        "kcal":        kcal,
+        "detalle":     str(data.get("detalle", "")).strip() or None,
+        "confianza":   confianza,
+        "nota":        str(data.get("nota", "")).strip() or None,
+    }
+
+
+def _v_ejercicio(data: dict) -> dict:
+    try:
+        kcal = int(float(data.get("kcal_quemadas", 0)))
+    except (TypeError, ValueError):
+        raise ValueError("kcal_quemadas debe ser un número.")
+    confianza = str(data.get("confianza", "MEDIA")).upper().strip()
+    if confianza not in CONFIANZAS:
+        confianza = "MEDIA"
+    return {
+        "descripcion":   str(data.get("descripcion", "")).strip(),
+        "kcal_quemadas": kcal,
+        "duracion_min":  int(data["duracion_min"]) if data.get("duracion_min") is not None else None,
+        "distancia_km":  float(data["distancia_km"]) if data.get("distancia_km") is not None else None,
+        "confianza":     confianza,
+        "nota":          str(data.get("nota", "")).strip() or None,
+    }
+
+
+def _v_foto(data: dict, porciones: Optional[float]) -> dict:
+    tipo = str(data.get("tipo", "PLATO")).upper().strip()
+
+    if tipo == "TABLA_NUTRICIONAL":
+        kcal_porcion = float(data.get("kcal_por_porcion", 0))
+        p = porciones or 1.0
+        return {
+            "tipo":               "TABLA_NUTRICIONAL",
+            "producto":           str(data.get("producto", "")).strip(),
+            "kcal_por_porcion":   int(kcal_porcion),
+            "porcion_g":          data.get("porcion_g"),
+            "porciones_consumidas": p,
+            "kcal_estimadas":     int(kcal_porcion * p),
+            "confianza":          "ALTA",
+            "detalle":            f"{p} porción(es) × {int(kcal_porcion)} kcal",
+        }
+
+    # PLATO por defecto
     try:
         kcal = int(float(data.get("kcal_estimadas", 0)))
     except (TypeError, ValueError):
-        raise ValueError("kcal_estimadas debe ser un número.")
+        kcal = 0
     confianza = str(data.get("confianza", "MEDIA")).upper().strip()
-    if confianza not in {"ALTA", "MEDIA", "BAJA"}:
+    if confianza not in CONFIANZAS:
         confianza = "MEDIA"
-    descripcion = str(data.get("descripcion", "")).strip()
-    if not descripcion:
-        raise ValueError("El modelo no devolvió descripción del plato.")
     return {
-        "descripcion":    descripcion,
+        "tipo":           "PLATO",
+        "descripcion":    str(data.get("descripcion", "")).strip(),
         "kcal_estimadas": kcal,
         "confianza":      confianza,
         "detalle":        str(data.get("detalle", "")).strip() or None,
     }
 
 
-def _validar_texto(data: dict) -> dict:
-    intent = str(data.get("intent", "OTRO")).upper().strip()
-    if intent not in INTENTS_VALIDOS:
-        intent = "OTRO"
-    return {
-        "intent":           intent,
-        "descripcion":      str(data.get("descripcion", "")).strip() or None,
-        "kcal":             float(data["kcal"]) if data.get("kcal") is not None else None,
-        "alimento":         data.get("alimento") or None,
-        "ejercicio":        data.get("ejercicio") or None,
-        "duracion_min":     int(data["duracion_min"]) if data.get("duracion_min") is not None else None,
-        "respuesta_directa": str(data.get("respuesta_directa", "")).strip() or None,
-    }
-
-
-def _validar_sugerencia(data: dict) -> dict:
+def _v_sugerencia(data: dict) -> dict:
     mensaje = str(data.get("mensaje", "")).strip()
     if not mensaje:
-        raise ValueError("El modelo no devolvió sugerencia.")
+        raise ValueError("Sin sugerencia.")
     opciones = data.get("opciones", [])
     if not isinstance(opciones, list):
         opciones = []
@@ -178,72 +303,99 @@ def _validar_sugerencia(data: dict) -> dict:
 
 class KaloRouter(BaseRouter):
     """
-    Router de inferencia IA para KALO.
-    Todos los endpoints quedan bajo el prefijo /kalo/.
-
-    La kalo-api (Docker) apunta a cada endpoint según la función:
-        LLM_VISION_URL=http://<aibase-ip>:8181/kalo/analizar-foto-comida
-        LLM_TEXT_URL=http://<aibase-ip>:8181/kalo/interpretar-texto
-        LLM_SUGGEST_URL=http://<aibase-ip>:8181/kalo/sugerencia-nutricional
+    Router IA de KALO. Todos los endpoints bajo /kalo/
+    En kalo-api: LLM_BASE_URL=http://<aibase-ip>:8181/kalo
     """
 
     prefix = "/kalo"
 
     def _registrar_rutas(self) -> None:
 
+        @self.router.post("/clasificar-intent")
+        def clasificar_intent(req: IntentRequest):
+            """Clasifica el intent del texto libre: COMIDA, EJERCICIO, CONSULTA u OTRO."""
+            if not req.texto.strip():
+                raise HTTPException(status_code=422, detail="Texto vacío.")
+            try:
+                data = self.motor.extraer_json(
+                    self.motor.texto(
+                        PROMPT_INTENT.format(texto=req.texto.strip()),
+                        max_tokens=80,
+                    )
+                )
+                return _v_intent(data)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+
+        @self.router.post("/inferir-comida")
+        def inferir_comida(req: InferirComidaRequest):
+            """Infiere calorías de texto libre de comida/bebida."""
+            if not req.texto.strip():
+                raise HTTPException(status_code=422, detail="Texto vacío.")
+            try:
+                data = self.motor.extraer_json(
+                    self.motor.texto(
+                        PROMPT_INFERIR_COMIDA.format(texto=req.texto.strip()),
+                        max_tokens=300,
+                    )
+                )
+                return _v_comida(data)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+
+        @self.router.post("/inferir-ejercicio")
+        def inferir_ejercicio(req: InferirEjercicioRequest):
+            """Infiere calorías quemadas de texto libre de ejercicio."""
+            if not req.texto.strip():
+                raise HTTPException(status_code=422, detail="Texto vacío.")
+            try:
+                data = self.motor.extraer_json(
+                    self.motor.texto(
+                        PROMPT_INFERIR_EJERCICIO.format(
+                            texto=req.texto.strip(),
+                            peso_kg=req.peso_kg,
+                            edad=req.edad,
+                        ),
+                        max_tokens=300,
+                    )
+                )
+                return _v_ejercicio(data)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+
         @self.router.post("/analizar-foto-comida")
-        def analizar_foto_comida(req: FotoComidaRequest):
-            """Estima las calorías de un plato a partir de una imagen en base64."""
+        def analizar_foto_comida(req: FotoRequest):
+            """
+            Analiza imagen — detecta automáticamente PLATO o TABLA_NUTRICIONAL.
+            Para tabla: usa porciones_consumidas para calcular kcal totales.
+            """
             if not req.imagen_b64.strip():
-                raise HTTPException(status_code=422, detail="La imagen no puede estar vacía.")
+                raise HTTPException(status_code=422, detail="Imagen vacía.")
             try:
                 data = self.motor.extraer_json(
                     self.motor.imagen(PROMPT_FOTO, req.imagen_b64, max_tokens=400)
                 )
-                return _validar_foto(data)
-            except ValueError as e:
-                raise HTTPException(status_code=422, detail=str(e))
-
-        @self.router.post("/interpretar-texto")
-        def interpretar_texto(req: TextoLibreRequest):
-            """
-            Interpreta texto libre del usuario en el contexto de su balance calórico.
-            Devuelve el intent detectado y datos extraídos para que la API actúe.
-            """
-            if not req.texto.strip():
-                raise HTTPException(status_code=422, detail="El texto no puede estar vacío.")
-            try:
-                prompt = PROMPT_TEXTO.format(
-                    texto=req.texto.strip(),
-                    objetivo=req.objetivo,
-                    consumidas=req.consumidas,
-                    quemadas=req.quemadas,
-                    disponibles=req.disponibles,
-                )
-                data = self.motor.extraer_json(
-                    self.motor.texto(prompt, max_tokens=300)
-                )
-                return _validar_texto(data)
+                return _v_foto(data, req.porciones_consumidas)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
 
         @self.router.post("/sugerencia-nutricional")
         def sugerencia_nutricional(req: SugerenciaRequest):
-            """
-            Genera una sugerencia nutricional personalizada según el balance del día.
-            """
+            """Genera sugerencia nutricional personalizada según el balance del día."""
             try:
-                prompt = PROMPT_SUGERENCIA.format(
-                    objetivo=req.objetivo,
-                    consumidas=req.consumidas,
-                    quemadas=req.quemadas,
-                    disponibles=req.disponibles,
-                    hora=req.hora,
-                    comidas=req.comidas,
-                )
                 data = self.motor.extraer_json(
-                    self.motor.texto(prompt, max_tokens=400)
+                    self.motor.texto(
+                        PROMPT_SUGERENCIA.format(
+                            objetivo=req.objetivo,
+                            consumidas=req.consumidas,
+                            quemadas=req.quemadas,
+                            disponibles=req.disponibles,
+                            hora=req.hora,
+                            comidas=req.comidas,
+                        ),
+                        max_tokens=400,
+                    )
                 )
-                return _validar_sugerencia(data)
+                return _v_sugerencia(data)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
