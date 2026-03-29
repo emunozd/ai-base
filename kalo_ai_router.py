@@ -130,23 +130,28 @@ Devuelve:
 }
 
 CASO B — Es una tabla nutricional (etiqueta de producto):
-Lee los valores de la tabla con precisión.
+Lee TODOS los valores con precisión. Presta especial atención a:
+- "Número de porciones por envase" o "Porciones por envase" → va en porciones_por_envase
+- "Calorías por porción" o "Por porción" → va en kcal_por_porcion
+- "Tamaño de porción" → va en porcion_g (solo el número en gramos o ml)
+
 Devuelve:
 {
   "tipo": "TABLA_NUTRICIONAL",
-  "producto": "nombre del producto si es legible",
-  "kcal_por_porcion": numero_entero,
-  "porcion_g": numero_o_null,
-  "porciones_por_envase": numero_o_null,
-  "kcal_total_envase": numero_o_null
+  "producto": "nombre del producto si es legible, o descripción del empaque",
+  "kcal_por_porcion": numero_entero_exacto_de_la_tabla,
+  "porcion_g": numero_gramos_o_ml_de_la_porcion,
+  "porciones_por_envase": numero_entero_exacto_de_la_tabla,
+  "kcal_total_envase": kcal_por_porcion_multiplicado_por_porciones
 }
 
 Reglas CRÍTICAS:
+- Para TABLA_NUTRICIONAL: copia los números EXACTAMENTE como aparecen en la etiqueta. NO los inventes.
+- Si el campo "Número de porciones por envase" dice 5, pon 5 en porciones_por_envase.
+- Si el campo "Por porción" dice 45, pon 45 en kcal_por_porcion.
 - Si el líquido en el recipiente NO es agua pura, NUNCA pongas 0 kcal.
 - Yogur, kéfir, jugos, batidos, leches vegetales SIEMPRE tienen calorías.
-- Un pocillo de yogur kéfir ≈ 75-150 kcal dependiendo del tipo.
-- Si no puedes identificar bien el alimento, da un estimado razonable y baja confianza a BAJA.
-- Para TABLA_NUTRICIONAL: lee los números tal como aparecen en la etiqueta."""
+- Si no puedes identificar bien el alimento, da un estimado razonable y baja confianza a BAJA."""
 
 
 # ── 5. Sugerencia nutricional ─────────────────────────────────────────────────
