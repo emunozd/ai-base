@@ -348,7 +348,7 @@ def _fetch_url(url: str, max_chars: int = WEB_FETCH_MAX_CHARS) -> Optional[str]:
             "Sec-Fetch-User": "?1",
             "Cache-Control": "max-age=0",
         }
-        r = httpx.get(url, headers=headers, timeout=8, follow_redirects=True)
+        r = httpx.get(url, headers=headers, timeout=4, follow_redirects=True)
         if r.status_code >= 400:
             # logger.warning("fetch_url rechazada HTTP %d: %s", r.status_code, url)
             return None
@@ -569,7 +569,7 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
 
     # Ejecutar búsquedas y acumular contexto
     bloques_web = []
-    for query in queries:
+    for query in queries[:2]:
         resultado = _web_search(query)
         if resultado:
             # logger.info("Búsqueda OK para %r (%d chars)", query, len(resultado))
