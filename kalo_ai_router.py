@@ -283,6 +283,26 @@ def _v_foto(data: dict, porciones: Optional[float]) -> dict:
     }
 
 
+import re as _re
+
+def _extraer_json_robusto(texto: str) -> dict:
+    """Extrae el primer objeto JSON del texto aunque venga con texto previo."""
+    import json
+    # Intentar directo primero
+    try:
+        return json.loads(texto)
+    except Exception:
+        pass
+    # Buscar el primer { ... } en el texto
+    match = _re.search(r'\{.*\}', texto, _re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except Exception:
+            pass
+    raise ValueError(f"No se pudo extraer JSON válido del texto: {texto[:200]}")
+
+
 def _v_sugerencia(data: dict) -> dict:
     mensaje = str(data.get("mensaje", "")).strip()
     if not mensaje:
@@ -317,12 +337,8 @@ class KaloRouter(BaseRouter):
             if not req.texto.strip():
                 raise HTTPException(status_code=422, detail="Texto vacío.")
             try:
-                data = self.motor.extraer_json(
-                    self.motor.texto(
-                        PROMPT_INTENT.format(texto=req.texto.strip()),
-                        max_tokens=80,
-                    )
-                )
+                raw = self.motor.texto(PROMPT_INTENT.format(texto=req.texto.strip()), max_tokens=80)
+                data = _extraer_json_robusto(raw)
                 return _v_intent(data)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
@@ -333,12 +349,8 @@ class KaloRouter(BaseRouter):
             if not req.texto.strip():
                 raise HTTPException(status_code=422, detail="Texto vacío.")
             try:
-                data = self.motor.extraer_json(
-                    self.motor.texto(
-                        PROMPT_INFERIR_COMIDA.format(texto=req.texto.strip()),
-                        max_tokens=300,
-                    )
-                )
+                raw = self.motor.texto(PROMPT_INFERIR_COMIDA.format(texto=req.texto.strip()), max_tokens=300)
+                data = _extraer_json_robusto(raw)
                 return _v_comida(data)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
@@ -349,16 +361,15 @@ class KaloRouter(BaseRouter):
             if not req.texto.strip():
                 raise HTTPException(status_code=422, detail="Texto vacío.")
             try:
-                data = self.motor.extraer_json(
-                    self.motor.texto(
-                        PROMPT_INFERIR_EJERCICIO.format(
-                            texto=req.texto.strip(),
-                            peso_kg=req.peso_kg,
-                            edad=req.edad,
-                        ),
-                        max_tokens=300,
-                    )
+                raw = self.motor.texto(
+                    PROMPT_INFERIR_EJERCICIO.format(
+                        texto=req.texto.strip(),
+                        peso_kg=req.peso_kg,
+                        edad=req.edad,
+                    ),
+                    max_tokens=300,
                 )
+                data = _extraer_json_robusto(raw)
                 return _v_ejercicio(data)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
@@ -372,9 +383,8 @@ class KaloRouter(BaseRouter):
             if not req.imagen_b64.strip():
                 raise HTTPException(status_code=422, detail="Imagen vacía.")
             try:
-                data = self.motor.extraer_json(
-                    self.motor.imagen(PROMPT_FOTO, req.imagen_b64, max_tokens=400)
-                )
+                raw = self.motor.imagen(PROMPT_FOTO, req.imagen_b64, max_tokens=400)
+                data = _extraer_json_robusto(raw)
                 return _v_foto(data, req.porciones_consumidas)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
