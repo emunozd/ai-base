@@ -146,79 +146,67 @@ Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parsear_texto_factura(texto: str) -> tuple[list[dict], str | None, str | None]:
-    """
-    Parsea el texto transcrito de una factura colombiana.
-    - Detecta ítems por el patrón: número de línea + código + valores
-    - Aplica descuentos (valores con "-") al ítem anterior
-    - El punto (.) es separador de miles en este formato
-    - Devuelve (items [{descripcion, monto}], comercio, fecha)
-    """
-    lineas   = texto.strip().split("\n")
-    items    = []
+    lineas = texto.strip().split("\n")
+    items = []
     comercio = None
-    fecha    = None
+    fecha = None
 
-    # Detectar fecha
+    # 1. Detectar Fecha
     for linea in lineas:
         m = re.search(r"Fecha[:\s]+(\d{4}[/\-]\d{2}[/\-]\d{2})", linea, re.IGNORECASE)
         if m:
             fecha = m.group(1).replace("/", "-")
             break
 
-    # Detectar comercio — primera línea antes de la tabla que parezca nombre
+    # 2. Detectar Comercio (Mejorado para saltar encabezados de "Factura")
     for linea in lineas[:10]:
         linea_s = linea.strip()
         if (re.match(r"^[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s\.\-]+$", linea_s)
                 and len(linea_s) > 4
-                and not re.match(r"^(Fecha|Pedido|Caja|Cajera|Cliente|Direcc|Barrio|Telefo|Email|Forma|Medio|Observa)", linea_s, re.IGNORECASE)):
+                and not re.match(r"^(Fecha|Pedido|Caja|Cajera|Cliente|Direcc|Barrio|Telefo|Email|Forma|Medio|Observa|Factura)", linea_s, re.IGNORECASE)):
             comercio = linea_s
             break
 
-    # Patrón para línea de ítem: empieza con dígito(s), tiene total al final X.XXX
-    pat_item   = re.compile(r"^\d+\s+\S+.*?\s+([\d]+\.[\d]{3})\s*$")
-    # Patrón para descuento: "Descuento XX% VALOR-"
-    pat_desc   = re.compile(r"[Dd]escuento\s+[\d,\.]+\s*%\s+([\d\.]+)-")
-    # Líneas a ignorar explícitamente
-    pat_ignorar = re.compile(
-        r"^(Subtotal|Total|IVA|CHEQUE|Valor|Medio|Forma|Observa|#\s*Art)", re.IGNORECASE
-    )
-
-    nombre_pendiente = None
-    monto_pendiente  = None
+    # Regex mejorados
+    # Detecta: # Articulo + Codigo + ... + Monto (Ej: 1 176 EXC 0 1,14 7.443)
+    pat_item = re.compile(r"^\d+\s+\S+.*?\s+([\d]{1,3}(?:\.[\d]{3})+)\s*$")
+    # Detecta descuento con o sin signo menos al final
+    pat_desc = re.compile(r"[Dd]escuento\s+[\d,\.]+\s*%\s+([\d\.]+)-?")
+    
+    item_actual = None
 
     for linea in lineas:
         linea_s = linea.strip()
-        if not linea_s:
+        if not linea_s or "Subtotal" in linea_s or "Valor Total" in linea_s:
             continue
 
-        # Línea de descuento → restar del ítem anterior
-        m_desc = pat_desc.search(linea_s)
-        if m_desc and monto_pendiente is not None:
-            descuento       = int(m_desc.group(1).replace(".", ""))
-            monto_pendiente = max(0, monto_pendiente - descuento)
-            continue
-
-        # Línea de ítem con código y total
+        # CASO A: Es una línea de encabezado de ítem (Número y Monto)
         m_item = pat_item.match(linea_s)
         if m_item:
-            # Guardar ítem anterior si está completo
-            if nombre_pendiente and monto_pendiente is not None and monto_pendiente > 0:
-                items.append({"descripcion": nombre_pendiente, "monto": monto_pendiente})
-            nombre_pendiente = None
-            monto_pendiente  = int(m_item.group(1).replace(".", ""))
+            # Si ya había uno pendiente sin cerrar, lo guardamos
+            if item_actual:
+                items.append(item_actual)
+            
+            monto = int(m_item.group(1).replace(".", ""))
+            item_actual = {"descripcion": "Producto sin nombre", "monto": monto}
             continue
 
-        # Nombre del producto — línea que sigue al ítem
-        if monto_pendiente is not None and nombre_pendiente is None:
-            if (not pat_ignorar.match(linea_s)
-                    and not re.match(r"^[\d\s]+$", linea_s)
-                    and re.match(r"^[A-Za-záéíóúñÁÉÍÓÚÑ]", linea_s)):
-                nombre_pendiente = linea_s
-                continue
+        # CASO B: Es una línea de descuento
+        m_desc = pat_desc.search(linea_s)
+        if m_desc and item_actual:
+            descuento = int(m_desc.group(1).replace(".", ""))
+            item_actual["monto"] = max(0, item_actual["monto"] - descuento)
+            continue
 
-    # Último ítem pendiente
-    if nombre_pendiente and monto_pendiente is not None and monto_pendiente > 0:
-        items.append({"descripcion": nombre_pendiente, "monto": monto_pendiente})
+        # CASO C: Es la descripción (línea de texto que sigue al ítem)
+        if item_actual and item_actual["descripcion"] == "Producto sin nombre":
+            # Validamos que sea texto y no basura
+            if re.match(r"^[A-Za-zÁÉÍÓÚÑ]", linea_s) and len(linea_s) > 3:
+                item_actual["descripcion"] = linea_s
+
+    # Guardar el último
+    if item_actual:
+        items.append(item_actual)
 
     return items, comercio, fecha
 
