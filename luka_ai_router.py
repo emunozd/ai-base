@@ -313,8 +313,11 @@ def _agrupar_por_categoria(
         return categorias
 
     total_calculado = round(sum(categorias.values()), 2)
+    logger.info("total_calculado:\n%s", total_calculado)
     diferencia      = round(total_real - total_calculado, 2)
+    logger.info("diferencia:\n%s", diferencia)
     tolerancia      = round(total_real * TOLERANCIA_PCT, 2)
+    logger.info("tolerancia:\n%s", tolerancia)
     #logger.info("total_calculado:\n%s", total_calculado)
     # Suma mayor que el total real con margen significativo → warning al usuario
     if diferencia < -tolerancia:
