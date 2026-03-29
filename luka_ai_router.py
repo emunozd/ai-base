@@ -323,8 +323,11 @@ def _agrupar_por_categoria(
     if diferencia < -tolerancia:
         logger.info("error debido a diferencia menor a tolerancia")
         raise ValueError(
-            f"Hubo un problema analizando la foto de la factura. "
-            f"Intenta de nuevo con una imagen más clara."
+            "No pude leer bien esta foto 📸\n\n"
+            "Por favor toma una nueva foto de la factura asegurándote de que:\n"
+            "• La imagen esté bien iluminada\n"
+            "• Se vea completa, sin partes cortadas\n"
+            "• El texto sea legible"
         )
 
     # Suma menor que el total real → agregar diferencia en categoría del comercio
