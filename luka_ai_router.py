@@ -305,6 +305,7 @@ class LukaRouter(BaseRouter):
                     req.imagen_b64,
                     max_tokens=800,
                 )
+                logger.info("TRANSCRIPCIÓN PASADA 1:\n%s", texto_transcrito)
                 if not texto_transcrito.strip():
                     raise ValueError("No se pudo transcribir el contenido de la imagen.")
 
