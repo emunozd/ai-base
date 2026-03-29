@@ -355,7 +355,7 @@ class LukaRouter(BaseRouter):
                     f"- {item['descripcion']}" for item in items_con_monto
                 )
                 prompt = PROMPT_CLASIFICAR_ITEMS.format(productos=texto_transcrito.strip())
-                raw    = self.motor.texto(prompt, max_tokens=800)
+                raw    = self.motor.texto(prompt, max_tokens=2400)
                 logger.info("CLASIFICACIÓN PASADA 2:\n%s", raw)
                 data   = self.motor.extraer_json(raw)
                 if not isinstance(data, list):
