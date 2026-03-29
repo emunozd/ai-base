@@ -60,10 +60,12 @@ Para cada artículo extrae: nombre, monto, descuento y categoría.
 
 REGLAS DE MONTOS — MUY IMPORTANTE:
 - El punto (.) es separador de miles en facturas colombianas. 42.668 = 42668. NUNCA es decimal.
-- "monto" es el precio del artículo antes del descuento, como entero sin separadores.
-- "descuento" es el valor de la línea "Descuento XX% VALOR-" si existe. Sin descuento usa 0.
-- Un descuento SIEMPRE es menor que el monto del artículo.
-- NO restes — devuelve monto y descuento por separado. Python hará la resta.
+- "monto" es el precio del artículo antes de cualquier descuento, como entero sin separadores.
+- "descuento" es el valor rebajado si hay una línea de descuento asociada al artículo. Sin descuento usa 0.
+- UN DESCUENTO SIEMPRE ES MENOR QUE EL PRECIO ORIGINAL. Si encuentras dos valores asociados a un artículo
+  donde uno es mayor y otro menor, el MAYOR es el monto y el MENOR es el descuento — sin excepción.
+- Los valores con signo "-" al final son descuentos, no precios.
+- NO restes nada — devuelve monto y descuento por separado como enteros.
 
 CATEGORÍAS DISPONIBLES (usa exactamente estos nombres):
 HOGAR, HOGAR_ARRIENDO, HOGAR_SERVICIOS, HOGAR_REPARACIONES,
