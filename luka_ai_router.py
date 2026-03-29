@@ -69,7 +69,7 @@ Si SUMA difiere del Valor Total en más del 5%:
   - Identifica artículos donde el monto parece demasiado bajo para ese producto.
   - Revisa si confundiste monto con descuento — el monto SIEMPRE es el mayor.
   - Corrige y vuelve a calcular hasta que SUMA ≈ Valor Total.
-PROHIBIDO responder si SUMA se aleja más del 5% del Valor Total.
+PROHIBIDO RESPONDER SI SUMA SE ALEJA MAS DEL 5% DEL VALOR TOTAL.
 
 PASO 4 — CATEGORÍA DEL COMERCIO:
 Basándote en los productos que vende este establecimiento (NO en su nombre),
@@ -313,15 +313,15 @@ def _agrupar_por_categoria(
         return categorias
 
     total_calculado = round(sum(categorias.values()), 2)
-    logger.info("total_calculado:\n%s", total_calculado)
+    #logger.info("total_calculado:\n%s", total_calculado)
     diferencia      = round(total_real - total_calculado, 2)
-    logger.info("diferencia:\n%s", diferencia)
+    #logger.info("diferencia:\n%s", diferencia)
     tolerancia      = round(total_real * TOLERANCIA_PCT, 2)
-    logger.info("tolerancia:\n%s", tolerancia)
+    #logger.info("tolerancia:\n%s", tolerancia)
     #logger.info("total_calculado:\n%s", total_calculado)
     # Suma mayor que el total real con margen significativo → warning al usuario
     if diferencia < -tolerancia:
-        logger.info("error debido a diferencia mejor a tolerancia")
+        logger.info("error debido a diferencia menor a tolerancia")
         raise ValueError(
             f"Hubo un problema analizando la foto de la factura. "
             f"Intenta de nuevo con una imagen más clara."
