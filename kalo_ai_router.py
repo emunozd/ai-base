@@ -147,8 +147,8 @@ Devuelve:
 
 Reglas CRÍTICAS:
 - Para TABLA_NUTRICIONAL: copia los números EXACTAMENTE como aparecen en la etiqueta. NO los inventes.
-- Tamaño de porcion es DIFERENTE a numero de porciones por envase, captura únicamente el NUMERO DE PORCIONES POR ENVASE o NUMERO DE PORCIONES y si el campo dice 5, pon 5 en porciones_por_envase.
-- Si el campo "Por porción" dice 45, pon 45 en kcal_por_porcion.
+- Si el campo "Número de porciones por envase" dice 4, pon 4 en porciones_por_envase.
+- Si el campo "Por porción" dice 14, pon 14 en kcal_por_porcion.
 - Si el líquido en el recipiente NO es agua pura, NUNCA pongas 0 kcal.
 - Yogur, kéfir, jugos, batidos, leches vegetales SIEMPRE tienen calorías.
 - Si no puedes identificar bien el alimento, da un estimado razonable y baja confianza a BAJA."""
@@ -381,15 +381,14 @@ class KaloRouter(BaseRouter):
 
         @self.router.post("/analizar-foto-comida")
         def analizar_foto_comida(req: FotoRequest):
-            """
-            Analiza imagen — detecta automáticamente PLATO o TABLA_NUTRICIONAL.
-            Para tabla: usa porciones_consumidas para calcular kcal totales.
-            """
             if not req.imagen_b64.strip():
                 raise HTTPException(status_code=422, detail="Imagen vacía.")
             try:
                 raw = self.motor.imagen(PROMPT_FOTO, req.imagen_b64, max_tokens=400)
+                import logging
+                logging.getLogger(__name__).info("FOTO RAW: %s", raw[:500])
                 data = _extraer_json_robusto(raw)
+                logging.getLogger(__name__).info("FOTO JSON: %s", data)
                 return _v_foto(data, req.porciones_consumidas)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
