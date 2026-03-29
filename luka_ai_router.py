@@ -64,7 +64,12 @@ REGLAS DE MONTOS — MUY IMPORTANTE:
 - "descuento" es el valor rebajado si hay una línea de descuento asociada al artículo. Sin descuento usa 0.
 - UN DESCUENTO SIEMPRE ES MENOR QUE EL PRECIO ORIGINAL. Si encuentras dos valores asociados a un artículo
   donde uno es mayor y otro menor, el MAYOR es el monto y el MENOR es el descuento — sin excepción.
+- Cada descuento pertenece ÚNICAMENTE al artículo que lo precede inmediatamente.
+  Un valor grande NO puede ser el descuento de un artículo de precio pequeño.
 - Los valores con signo "-" al final son descuentos, no precios.
+- La suma de (monto - descuento) de todos los artículos debe SER IGUAL al VALOR TOTAL
+  que aparece al final de la factura. Si tu suma se aleja mucho del Valor Total indicado,
+  DEBES REVISAR los artículos donde confundiste precio con descuento y CORREGIRLOS antes de responder.
 - NO restes nada — devuelve monto y descuento por separado como enteros.
 
 CATEGORÍAS DISPONIBLES (usa exactamente estos nombres):
