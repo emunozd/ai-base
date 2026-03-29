@@ -13,6 +13,11 @@ Para agregar otro proyecto en el futuro:
     1. Crea otro_proyecto_router.py con una clase que extienda BaseRouter.
     2. Importa y registra esa clase en main.py.
     3. Sus endpoints quedan bajo /otro-proyecto/...
+
+Estrategia de categorización de facturas:
+    El modelo clasifica cada ítem individualmente (no suma).
+    Python acumula los totales por categoría → aritmética exacta.
+    El formato de salida hacia luka-api no cambia.
 """
 from typing import Any
 
@@ -38,7 +43,12 @@ SYSTEM_PROMPT = (
     "NUNCA expliques tu razonamiento. SOLO devuelve el JSON solicitado, sin texto adicional."
 )
 
-PROMPT_FACTURA = """Analiza el siguiente contenido de una factura o recibo y clasifica el gasto total por categorías.
+# ─────────────────────────────────────────────────────────────────────────────
+# Prompts
+# ─────────────────────────────────────────────────────────────────────────────
+
+PROMPT_FACTURA = """Analiza el siguiente contenido de una factura o recibo.
+Devuelve CADA ítem de la factura con su monto y categoría. NO sumes — devuelve un objeto por ítem.
 
 CATEGORÍAS DISPONIBLES (usa exactamente estos nombres):
 HOGAR, HOGAR_ARRIENDO, HOGAR_SERVICIOS, HOGAR_REPARACIONES,
@@ -47,42 +57,40 @@ MEDICAMENTOS, OCIO, ANTOJO, TRANSPORTE, TECNOLOGÍA, ROPA, EDUCACIÓN, MASCOTAS
 
 REGLAS DE FORMATO NUMÉRICO — MUY IMPORTANTE:
 - Esta es una factura colombiana. El punto (.) es separador de MILES, no decimales.
-- La coma (,) es separador decimal.
-- Ejemplos: 494.498 = 494498 pesos. 1.250.000 = 1250000 pesos. 42.668 = 42668 pesos.
-- NUNCA interpretes el punto como decimal en valores de esta factura.
-- Los totales deben ser números enteros en pesos colombianos (COP), sin puntos ni comas.
+- La coma (,) es separador decimal en centavos (raro en facturas COP).
+- Ejemplos: 494.498 = 494498 pesos. 115.316 = 115316 pesos. 42.668 = 42668 pesos. 7.443 = 7443 pesos.
+- NUNCA interpretes el punto como decimal. Siempre es separador de miles.
+- Los montos deben ser números enteros en pesos colombianos (COP), sin puntos ni comas.
+- Si la factura muestra descuentos, usa el valor DESPUÉS del descuento (valor final pagado).
 
 REGLAS DE CATEGORÍA:
 CANASTA_VERDURAS  → frutas, verduras, tubérculos, granos secos, legumbres frescas.
-CANASTA_PROTEINA  → carnes, pollo, pescado, mariscos, huevos, lácteos (leche, queso, yogur).
-CANASTA_ASEO      → detergente, jabón para ropa, cloro, limpiapisos, escoba, trapero, desinfectante superficies.
-CANASTA_HIGIENE   → desodorante, shampoo, acondicionador, crema corporal, maquillaje, cuidado facial, toallas higiénicas, pañales.
-CANASTA           → alimentos básicos de difícil clasificación (arroz, aceite, sal, azúcar, pasta, enlatados). Usar si no encaja en CANASTA_VERDURAS o CANASTA_PROTEINA.
+CANASTA_PROTEINA  → carnes, pollo, pescado, mariscos, huevos, lácteos (leche, queso, yogur, mantequilla).
+CANASTA_ASEO      → detergente, jabón para ropa, cloro, limpiapisos, escoba, trapero, desinfectante superficies, vinagre de limpieza.
+CANASTA_HIGIENE   → desodorante, shampoo, acondicionador, crema corporal, maquillaje, cuidado facial, toallas higiénicas, pañales, jabón de baño.
+CANASTA           → alimentos básicos de difícil clasificación (arroz, aceite, sal, azúcar, pasta, enlatados, especias, salsas, champiñones). Usar si no encaja en CANASTA_VERDURAS ni CANASTA_PROTEINA.
 HOGAR_ARRIENDO    → arriendo mensual, administración del edificio.
 HOGAR_SERVICIOS   → agua, luz, gas, internet, teléfono fijo.
-HOGAR_REPARACIONES → plomería, electricista, pintura, instalación de puertas o ventanas, reparaciones del inmueble. NUNCA incluir electrodomésticos ni TV aquí.
-HOGAR             → gastos del hogar que no encajan en arriendo, servicios ni reparaciones (ejemplo: elementos de decoración menores).
+HOGAR_REPARACIONES → plomería, electricista, pintura, instalación de puertas o ventanas. NUNCA electrodomésticos ni TV.
+HOGAR             → elementos del hogar que no encajan en las anteriores (decoración, menaje).
 MEDICAMENTOS      → farmacia, medicamentos, consultas médicas, parafarmacia.
 OCIO              → streaming, entretenimiento, deportes, viajes, videojuegos, juguetes.
 ANTOJO            → comida por placer, restaurantes, domicilios, dulces, snacks, gaseosas.
 TRANSPORTE        → gasolina, taxi, bus, peajes, Uber, parqueadero.
-TECNOLOGÍA        → celulares, computadores, televisores, electrodomésticos (nevera, lavadora, microondas, etc.), software, internet como servicio de datos.
+TECNOLOGÍA        → celulares, computadores, televisores, electrodomésticos (nevera, lavadora, microondas), software, datos móviles.
 ROPA              → ropa, calzado, accesorios de vestir.
 EDUCACIÓN         → cursos, libros, útiles escolares, matrículas.
 MASCOTAS          → veterinario, concentrado, accesorios para mascotas.
 
-- Solo incluye categorías con valor > 0.
-- Los totales deben ser números enteros sin separadores.
-
 {contenido}
 
-Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
-{{
-  "categorias": {{"CATEGORIA": total_en_pesos}},
-  "comercio": "nombre del comercio o null",
-  "fecha": "YYYY-MM-DD o null",
-  "total_factura": total_general_en_pesos
-}}"""
+Devuelve ÚNICAMENTE este JSON (lista de ítems), sin explicaciones ni texto adicional:
+[
+  {{"descripcion": "nombre del ítem", "monto": valor_entero_en_pesos, "categoria": "NOMBRE_CATEGORIA"}},
+  ...
+]
+
+IMPORTANTE: El campo "monto" debe ser el valor total pagado por ese ítem (precio × cantidad, ya con descuento aplicado), como número entero sin separadores."""
 
 PROMPT_GASTO_MANUAL = """El usuario describió uno o varios gastos con sus propias palabras. Extrae TODOS los gastos mencionados.
 
@@ -99,19 +107,19 @@ REGLAS PARA EL MONTO:
 
 REGLAS PARA LA CATEGORÍA:
 CANASTA_VERDURAS  → frutas, verduras, tubérculos, granos secos, legumbres frescas.
-CANASTA_PROTEINA  → carnes, pollo, pescado, mariscos, huevos, lácteos (leche, queso, yogur).
+CANASTA_PROTEINA  → carnes, pollo, pescado, mariscos, huevos, lácteos (leche, queso, yogur, mantequilla).
 CANASTA_ASEO      → detergente, jabón ropa, cloro, limpiapisos, escoba, trapero, desinfectante.
 CANASTA_HIGIENE   → desodorante, shampoo, crema, maquillaje, cuidado facial, toallas higiénicas, pañales.
-CANASTA           → alimentos básicos que no encajan en verduras ni proteína (arroz, aceite, sal, azúcar, pasta, enlatados).
+CANASTA           → alimentos básicos que no encajan en verduras ni proteína (arroz, aceite, sal, azúcar, pasta, enlatados, especias).
 HOGAR_ARRIENDO    → arriendo, administración.
 HOGAR_SERVICIOS   → agua, luz, gas, internet, teléfono fijo.
-HOGAR_REPARACIONES → plomería, electricista, pintura, puertas, ventanas, instalaciones del inmueble. NUNCA electrodomésticos ni TV.
+HOGAR_REPARACIONES → plomería, electricista, pintura, puertas, ventanas. NUNCA electrodomésticos ni TV.
 HOGAR             → gastos del hogar sin clasificación clara.
 MEDICAMENTOS      → drogas, farmacia, consulta médica, parafarmacia.
 OCIO              → entretenimiento, streaming, deporte, videojuegos, viajes.
 ANTOJO            → gaseosa, snacks, dulces, comida por placer, restaurante, domicilio.
 TRANSPORTE        → bus, taxi, Uber, gasolina, peaje, parqueadero.
-TECNOLOGÍA        → celular, computador, televisor, electrodomésticos (nevera, lavadora, microondas, etc.), software, datos móviles.
+TECNOLOGÍA        → celular, computador, televisor, electrodomésticos (nevera, lavadora, microondas), software, datos móviles.
 ROPA              → ropa, zapatos, accesorios de vestir.
 EDUCACIÓN         → libros, cursos, útiles, matrícula.
 MASCOTAS          → veterinario, concentrado, accesorios mascotas.
@@ -126,26 +134,11 @@ Devuelve ÚNICAMENTE este JSON, sin explicaciones ni texto adicional:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helpers de validación (privados a LUKA)
+# Helpers de validación y procesamiento
 # ─────────────────────────────────────────────────────────────────────────────
-def _validar_categorias(categorias: dict) -> dict:
-    resultado = {}
-    for cat, total in categorias.items():
-        cat_upper = cat.upper().strip()
-        if cat_upper in CATEGORIAS_VALIDAS:
-            try:
-                valor = float(total)
-                if valor > 0:
-                    resultado[cat_upper] = round(valor, 2)
-            except (TypeError, ValueError):
-                pass  # valor inválido, se ignora silenciosamente
-        # categorías desconocidas se ignoran
-    if not resultado:
-        raise ValueError("El modelo no devolvió ninguna categoría válida.")
-    return resultado
-
 
 def _validar_gastos_manuales(data: Any) -> list:
+    """Sin cambios — sigue igual para gastos manuales."""
     if not isinstance(data, list):
         data = [data]
     resultado = []
@@ -153,8 +146,8 @@ def _validar_gastos_manuales(data: Any) -> list:
         categoria = str(item.get("categoria", "")).upper().strip()
         if categoria not in CATEGORIAS_VALIDAS:
             continue
-        monto_raw = item.get("monto")
-        monto     = round(float(monto_raw), 2) if monto_raw is not None else None
+        monto_raw   = item.get("monto")
+        monto       = round(float(monto_raw), 2) if monto_raw is not None else None
         descripcion = item.get("descripcion", "").strip() or None
         resultado.append({
             "categoria":   categoria,
@@ -166,14 +159,72 @@ def _validar_gastos_manuales(data: Any) -> list:
     return resultado
 
 
-def _procesar_resultado_factura(data: dict) -> dict:
-    categorias = _validar_categorias(data.get("categorias", {}))
+def _procesar_items_factura(items: list, comercio: str = None, fecha: str = None) -> dict:
+    """
+    Recibe lista de ítems [{descripcion, monto, categoria}] del modelo.
+    Python hace la suma por categoría — aritmética exacta, sin depender del modelo.
+    Devuelve el mismo formato que antes: {categorias, comercio, fecha, total_factura}.
+    """
+    categorias: dict[str, float] = {}
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        cat = str(item.get("categoria", "")).upper().strip()
+        if cat not in CATEGORIAS_VALIDAS:
+            continue
+        monto_raw = item.get("monto")
+        if monto_raw is None:
+            continue
+        try:
+            monto = float(monto_raw)
+            if monto <= 0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        categorias[cat] = round(categorias.get(cat, 0.0) + monto, 2)
+
+    if not categorias:
+        raise ValueError("El modelo no devolvió ningún ítem válido.")
+
+    total = round(sum(categorias.values()), 2)
+
     return {
         "categorias":    categorias,
-        "comercio":      data.get("comercio") or None,
-        "fecha":         data.get("fecha") or None,
-        "total_factura": round(float(data.get("total_factura") or sum(categorias.values())), 2),
+        "comercio":      comercio or None,
+        "fecha":         fecha or None,
+        "total_factura": total,
     }
+
+
+def _extraer_meta_factura(data: Any) -> tuple[list, str | None, str | None]:
+    """
+    El modelo devuelve una lista de ítems.
+    Opcionalmente puede venir envuelta en un dict con comercio/fecha.
+    Soporta ambos formatos para robustez.
+    """
+    comercio = None
+    fecha    = None
+
+    if isinstance(data, list):
+        return data, comercio, fecha
+
+    if isinstance(data, dict):
+        # Formato alternativo: {"items": [...], "comercio": "...", "fecha": "..."}
+        comercio = data.get("comercio") or None
+        fecha    = data.get("fecha") or None
+        items    = data.get("items") or data.get("categorias") or []
+        if isinstance(items, list):
+            return items, comercio, fecha
+        # Si "categorias" es dict (formato antiguo), convertir para compatibilidad
+        if isinstance(items, dict):
+            converted = [
+                {"descripcion": cat, "monto": val, "categoria": cat}
+                for cat, val in items.items()
+            ]
+            return converted, comercio, fecha
+
+    return [], comercio, fecha
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -221,10 +272,11 @@ class LukaRouter(BaseRouter):
                 prompt = PROMPT_FACTURA.format(
                     contenido=f"TEXTO DE LA FACTURA:\n{req.texto.strip()}"
                 )
-                data = self.motor.extraer_json(
-                    self.motor.texto(prompt, max_tokens=600)
-                )
-                return _procesar_resultado_factura(data)
+                # max_tokens aumentado: ahora el modelo devuelve un ítem por línea
+                raw  = self.motor.texto(prompt, max_tokens=1200)
+                data = self.motor.extraer_json(raw)
+                items, comercio, fecha = _extraer_meta_factura(data)
+                return _procesar_items_factura(items, comercio, fecha)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
 
@@ -234,24 +286,27 @@ class LukaRouter(BaseRouter):
                 raise HTTPException(status_code=422, detail="La imagen no puede estar vacía.")
             try:
                 prompt = PROMPT_FACTURA.format(
-                    contenido="Analiza la imagen del recibo o factura que se adjunta."
+                    contenido="Analiza la imagen del recibo o factura que se adjunta. "
+                              "Extrae cada ítem con su nombre, monto final pagado y categoría."
                 )
-                data = self.motor.extraer_json(
-                    self.motor.imagen(prompt, req.imagen_b64, max_tokens=600)
-                )
-                return _procesar_resultado_factura(data)
+                # max_tokens aumentado: ahora el modelo devuelve un ítem por línea
+                raw  = self.motor.imagen(prompt, req.imagen_b64, max_tokens=1200)
+                data = self.motor.extraer_json(raw)
+                items, comercio, fecha = _extraer_meta_factura(data)
+                return _procesar_items_factura(items, comercio, fecha)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
 
         @self.router.post("/categorizar-gasto-manual")
         def categorizar_gasto_manual(req: GastoManualRequest):
+            """Sin cambios — gastos manuales no necesitan aritmética."""
             if not req.descripcion.strip():
                 raise HTTPException(status_code=422, detail="La descripción no puede estar vacía.")
             try:
                 data = self.motor.extraer_json(
                     self.motor.texto(
                         PROMPT_GASTO_MANUAL.format(descripcion=req.descripcion.strip()),
-                        max_tokens=300,
+                        max_tokens=400,
                     )
                 )
                 return _validar_gastos_manuales(data)
@@ -261,4 +316,3 @@ class LukaRouter(BaseRouter):
 
 # luka_ai_router.py no tiene punto de entrada.
 # El servidor se levanta desde main.py — ver ~/projects/AIBase/main.py
-
