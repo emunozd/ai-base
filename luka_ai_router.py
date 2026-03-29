@@ -348,7 +348,7 @@ class LukaRouter(BaseRouter):
                 if not items_con_monto:
                     raise ValueError("No se pudieron extraer ítems de la imagen.")
 
-                logger.info("Ítems parseados: %d — total Python: $%s",
+                #logger.info("Ítems parseados: %d — total Python: $%s",
                             len(items_con_monto),
                             f"{sum(i['monto'] for i in items_con_monto):,.0f}")
 
