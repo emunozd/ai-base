@@ -146,9 +146,12 @@ ARTÍCULOS (una línea por artículo):
 Reglas de valores:
 - El punto (.) es separador de miles. Ejemplo: 42.668 → 42668. NUNCA es decimal.
 - Si hay descuento, usa el valor DESPUÉS del descuento.
+- NO omitas ningún artículo — transcribe absolutamente todos los que aparecen.
 - No incluyas subtotales, IVA ni total general.
 - No incluyas códigos de barras ni números de referencia.
-- Solo nombre del producto y valor final pagado."""
+- Solo nombre del producto y valor final pagado.
+
+IMPORTANTE: La factura dice "Total lineas factura: 24" — deben aparecer exactamente 24 artículos."""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers de validación y procesamiento
