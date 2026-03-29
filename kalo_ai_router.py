@@ -258,8 +258,10 @@ def _v_foto(data: dict, porciones: Optional[float]) -> dict:
     tipo = str(data.get("tipo", "PLATO")).upper().strip()
 
     if tipo == "TABLA_NUTRICIONAL":
-        kcal_porcion = float(data.get("kcal_por_porcion", 0))
-        p = porciones or 1.0
+        kcal_porcion  = float(data.get("kcal_por_porcion", 0))
+        # Usar porciones_por_envase del JSON del modelo, no el parámetro externo
+        porciones_env = float(data.get("porciones_por_envase") or porciones or 1)
+        p = porciones_env
         return {
             "tipo":               "TABLA_NUTRICIONAL",
             "producto":           str(data.get("producto", "")).strip(),
@@ -268,7 +270,7 @@ def _v_foto(data: dict, porciones: Optional[float]) -> dict:
             "porciones_consumidas": p,
             "kcal_estimadas":     int(kcal_porcion * p),
             "confianza":          "ALTA",
-            "detalle":            f"{p} porción(es) × {int(kcal_porcion)} kcal",
+            "detalle":            f"{int(p)} porción(es) × {int(kcal_porcion)} kcal",
         }
 
     # PLATO por defecto
