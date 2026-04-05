@@ -388,7 +388,7 @@ class KaloRouter(BaseRouter):
             try:
                 raw = self.motor.imagen(PROMPT_FOTO, req.imagen_b64, max_tokens=400)
                 import logging
-                #logging.getLogger(__name__).info("FOTO RAW: %s", raw[:500])
+                logging.getLogger(__name__).info("FOTO RAW: %s", raw[:500])
                 data = _extraer_json_robusto(raw)
                 #logging.getLogger(__name__).info("FOTO JSON: %s", data)
                 return _v_foto(data, req.porciones_consumidas)
