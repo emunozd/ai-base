@@ -137,6 +137,7 @@ class InferirEjercicioRequest(BaseModel):
 class FotoRequest(BaseModel):
     imagen_b64: str
     porciones_consumidas: Optional[float] = None
+    caption: Optional[str] = None  # descripción opcional del usuario
 
 class SugerenciaRequest(BaseModel):
     objetivo: float
@@ -312,8 +313,12 @@ class KaloRouter(BaseRouter):
             if not req.imagen_b64.strip():
                 raise HTTPException(status_code=422, detail="Imagen vacía.")
             try:
-                # max_tokens=800 para que el modelo no se quede sin tokens antes del JSON
-                raw = self.motor.imagen(PROMPT_FOTO, req.imagen_b64, max_tokens=800)
+                # Agregar contexto del caption solo si existe y es útil
+                prompt = PROMPT_FOTO
+                if req.caption and len(req.caption.strip()) >= 3:
+                    prompt = f"El usuario describe esta imagen como: \"{req.caption.strip()}\"\n\n" + PROMPT_FOTO
+
+                raw = self.motor.imagen(prompt, req.imagen_b64, max_tokens=800)
                 import logging
                 logging.getLogger(__name__).info("FOTO RAW: %s", raw[:300])
                 data = _extraer_json_robusto(raw)
