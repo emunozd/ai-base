@@ -214,8 +214,11 @@ def _v_foto(data: dict, porciones: Optional[float]) -> dict:
             "confianza":          "ALTA",
             "detalle":            f"{int(p)} porción(es) × {int(kcal_porcion)} kcal",
         }
+    # Factor de sobreestimación para fotos de platos — compensa la incertidumbre visual
+    # Las fotos siempre subestiman porciones reales; 1.55 lleva 450 → ~700 kcal
+    FACTOR_FOTO_PLATO = 1.55
     try:
-        kcal = int(float(data.get("kcal_estimadas", 0)))
+        kcal = int(float(data.get("kcal_estimadas", 0))* FACTOR_FOTO_PLATO)
     except (TypeError, ValueError):
         kcal = 0
     confianza = str(data.get("confianza", "MEDIA")).upper().strip()
