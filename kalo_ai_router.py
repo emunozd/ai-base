@@ -8,10 +8,16 @@ Endpoints:
   POST /kalo/analizar-foto-comida    — estima kcal desde foto (plato o tabla nutricional)
   POST /kalo/sugerencia-nutricional  — consejo según balance del día
 """
+import os
 from typing import Optional
 from fastapi import HTTPException
 from pydantic import BaseModel
 from kingsrow_ai_base import BaseRouter, MotorInferencia
+
+# Factor de sobreestimación para fotos de platos — configurable via .env
+# Compensa que el LLM tiende a subestimar porciones reales
+# Ejemplo: 1.40 lleva 500 kcal → 700 kcal
+FACTOR_FOTO_PLATO = float(os.environ.get("KALO_FACTOR_FOTO_PLATO", "1.40"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Prompts
@@ -214,13 +220,12 @@ def _v_foto(data: dict, porciones: Optional[float]) -> dict:
             "confianza":          "ALTA",
             "detalle":            f"{int(p)} porción(es) × {int(kcal_porcion)} kcal",
         }
-    # Factor de sobreestimación para fotos de platos — compensa la incertidumbre visual
-    # Las fotos siempre subestiman porciones reales; 1.55 era para Qwen3.5
-    FACTOR_FOTO_PLATO = 1.40
+    # Factor de sobreestimación configurable via env KALO_FACTOR_FOTO_PLATO
     try:
-        kcal = int(float(data.get("kcal_estimadas", 0))* FACTOR_FOTO_PLATO)
+        kcal_raw = int(float(data.get("kcal_estimadas", 0)))
     except (TypeError, ValueError):
-        kcal = 0
+        kcal_raw = 0
+    kcal = int(kcal_raw * FACTOR_FOTO_PLATO)
     confianza = str(data.get("confianza", "MEDIA")).upper().strip()
     if confianza not in CONFIANZAS:
         confianza = "MEDIA"
