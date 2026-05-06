@@ -68,7 +68,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # FastAPI usa un threadpool donde los threads no tienen el stream inicializado.
 # Solución: executor de 1 thread dedicado con stream GPU propio.
 def _init_mlx_thread():
-    mx.new_thread_local_stream(mx.gpu)
+    mx.new_thread_local_stream(mx.gpu)  # stream 0
+    mx.new_thread_local_stream(mx.gpu)  # stream 1 — requerido por TurboQuant
 
 _GPU_EXECUTOR = ThreadPoolExecutor(max_workers=1, initializer=_init_mlx_thread)
 
