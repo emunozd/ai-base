@@ -283,7 +283,7 @@ def _url_es_antigua(url: str) -> bool:
     return False
 
 
-def _fetch_url(url: str, max_chars: int = WEB_FETCH_MAX_CHARS) -> Optional[str]:
+def _fetch_url(url: str, max_chars: int = KR_WEB_FETCH_MAX_CHARS) -> Optional[str]:
     """
     Descarga el contenido real de una URL y lo limpia.
     Rechaza: respuestas 4xx/5xx, URLs con años anteriores a 2025.
