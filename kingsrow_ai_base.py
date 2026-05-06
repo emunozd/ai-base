@@ -47,6 +47,7 @@ from typing import Any, Generator, Optional
 
 import mlx.core as mx
 import uvicorn
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from mlx_vlm import generate as vlm_generate
@@ -56,14 +57,25 @@ from mlx_vlm.utils import load_config
 from PIL import Image
 from pydantic import BaseModel
 
-mx.set_default_device(mx.gpu)
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 # Silenciar librerías de búsqueda web — su verbosidad no aporta al log de producción
 logging.getLogger("ddgs").setLevel(logging.WARNING)
 logging.getLogger("primp").setLevel(logging.CRITICAL)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# TurboQuant requiere thread-local stream GPU en el mismo thread de inferencia.
+# FastAPI usa un threadpool donde los threads no tienen el stream inicializado.
+# Solución: executor de 1 thread dedicado con stream GPU propio.
+def _init_mlx_thread():
+    mx.new_thread_local_stream(mx.gpu)
+
+_GPU_EXECUTOR = ThreadPoolExecutor(max_workers=1, initializer=_init_mlx_thread)
+
+def _inferir_en_gpu(fn, *args, **kwargs):
+    """Ejecuta fn en el thread GPU dedicado con stream inicializado."""
+    return _GPU_EXECUTOR.submit(fn, *args, **kwargs).result()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Config
@@ -202,7 +214,6 @@ def _construir_prompt(mensajes: list[dict], system: Any = None) -> str:
     el loop de herramientas y pueda continuar correctamente.
     """
     _, processor, _ = _ModeloMLX.get()
-    tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
 
     msgs = []
     if system:
@@ -219,7 +230,7 @@ def _construir_prompt(mensajes: list[dict], system: Any = None) -> str:
     if not msgs:
         raise ValueError("No hay mensajes válidos.")
 
-    return tokenizer.apply_chat_template(
+    return processor.apply_chat_template(
         msgs,
         tokenize=False,
         add_generation_prompt=True,
@@ -337,21 +348,8 @@ def _fetch_url(url: str, max_chars: int = WEB_FETCH_MAX_CHARS) -> Optional[str]:
     try:
         import httpx
         from bs4 import BeautifulSoup
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br",
-            "DNT": "1",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "Cache-Control": "max-age=0",
-        }
-        r = httpx.get(url, headers=headers, timeout=4, follow_redirects=True)
+        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+        r = httpx.get(url, headers=headers, timeout=8, follow_redirects=True)
         if r.status_code >= 400:
             # logger.warning("fetch_url rechazada HTTP %d: %s", r.status_code, url)
             return None
@@ -359,25 +357,7 @@ def _fetch_url(url: str, max_chars: int = WEB_FETCH_MAX_CHARS) -> Optional[str]:
         for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
             tag.decompose()
         texto = " ".join(soup.get_text(separator=" ").split())
-        if not texto.strip():
-            return None
-        # Detectar paywall / bloqueo — contenido demasiado corto o señales conocidas
-        _PAYWALL_SIGNALS = [
-            "powered and protected by",
-            "access denied",
-            "just a moment",
-            "checking your browser",
-            "please verify you are a human",
-        ]
-        texto_lower = texto.lower()
-        es_bloqueado = (
-            len(texto) < 150 or
-            any(s in texto_lower for s in _PAYWALL_SIGNALS)
-        )
-        if es_bloqueado:
-            logger.warning("fetch_url: contenido bloqueado o paywall: %s", url)
-            return None
-        return texto[:max_chars]
+        return texto[:max_chars] if texto.strip() else None
     except Exception as e:
         logger.warning("fetch_url falló (%s): %s", url, e)
         return None
@@ -385,22 +365,11 @@ def _fetch_url(url: str, max_chars: int = WEB_FETCH_MAX_CHARS) -> Optional[str]:
 
 def _web_search(query: str, max_results: int = WEB_SEARCH_MAX_RESULTS) -> Optional[str]:
     """
-    Si query es una URL, hace fetch directo de esa página.
-    Si es texto, busca con ddgs y hace fetch de la primera URL que responda.
+    1. Busca con ddgs para obtener URLs relevantes.
+    2. Hace fetch del contenido real de la primera URL que responda.
+    Si el fetch falla para todas, usa los snippets como fallback.
+    Requiere: pip install ddgs httpx beautifulsoup4 --break-system-packages
     """
-    # Fetch directo si la query es una URL
-    if re.match(r'https?://', query.strip()):
-        contenido = _fetch_url(query.strip())
-        if contenido:
-            return "Contenido de " + query.strip() + ":\n\n" + contenido
-        # Fetch falló — decirle al modelo que no invente
-        return (
-            "AVISO: No fue posible recuperar el contenido de " + query.strip() + " "
-            "(error de acceso, página no disponible o bloqueada). "
-            "NO inventes ni supongas el contenido de ese enlace. "
-            "Informa al usuario que no pudiste acceder al artículo y sugiere que lo abra directamente."
-        )
-
     try:
         from ddgs import DDGS
     except ImportError:
@@ -435,17 +404,9 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
     """
     Inferencia ligera sobre la última pregunta del usuario.
     Devuelve lista de queries a buscar (una por tema), o [] si no hace falta.
-    - Si el mensaje contiene una URL, la retorna directamente para fetch — sin inferencia.
-    - Nunca incluye queries para fecha/hora — eso lo provee el servidor.
-    - Queries siempre en inglés.
+    Nunca incluye queries para fecha/hora — eso lo provee el servidor.
+    Queries siempre en inglés.
     """
-    # Detección inmediata de URLs — fetch directo sin gastar tokens del clasificador
-    _URL_PAT = re.compile(r"https?://\S+")
-    urls = _URL_PAT.findall(pregunta)
-    if urls:
-        #logger.info("URL detectada en pregunta, fetch directo: %s", urls[0])
-        return [urls[0]]
-
     model, processor, _ = _ModeloMLX.get()
 
     system_prompt = (
@@ -461,8 +422,7 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
         '(tasas, salarios, estadísticas, precios históricos).'
     )
 
-    tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
-    prompt = tokenizer.apply_chat_template(
+    prompt = processor.apply_chat_template(
         [
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": pregunta},
@@ -472,7 +432,7 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
         enable_thinking=False,
     )
 
-    result    = vlm_generate(model, processor, prompt, max_tokens=128, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+    result    = _inferir_en_gpu(vlm_generate, model, processor, prompt, max_tokens=128, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
     respuesta = result.text.strip() if hasattr(result, "text") else str(result).strip()
     respuesta = re.sub(r"```json|```", "", respuesta).strip()
 
@@ -572,7 +532,7 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
 
     # Ejecutar búsquedas y acumular contexto
     bloques_web = []
-    for query in queries[:2]:
+    for query in queries:
         resultado = _web_search(query)
         if resultado:
             # logger.info("Búsqueda OK para %r (%d chars)", query, len(resultado))
@@ -595,7 +555,7 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
         )
 
     prompt = _construir_prompt(mensajes, system="\n\n".join(partes))
-    result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+    result = _inferir_en_gpu(vlm_generate, model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
     return result.text.strip() if hasattr(result, "text") else str(result).strip()
 
 
@@ -620,7 +580,7 @@ class MotorInferencia:
             num_images=0,
             enable_thinking=False,
         )
-        result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+        result = _inferir_en_gpu(vlm_generate, model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
         return result.text.strip() if hasattr(result, "text") else str(result).strip()
 
     @staticmethod
@@ -641,7 +601,7 @@ class MotorInferencia:
                 num_images=1,
                 enable_thinking=False,
             )
-            result = vlm_generate(model, processor, prompt, image=tmp_path, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+            result = _inferir_en_gpu(vlm_generate, model, processor, prompt, image=tmp_path, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
             return result.text.strip() if hasattr(result, "text") else str(result).strip()
         finally:
             if os.path.exists(tmp_path):
@@ -802,28 +762,12 @@ class KingsrowAI:
             system_con_tools = req.system
             if req.tools:
                 tools_txt = json.dumps(req.tools, ensure_ascii=False, indent=2)
-
-                forced_tool = None
-                if isinstance(req.tool_choice, dict) and req.tool_choice.get("type") == "tool":
-                    forced_tool = req.tool_choice.get("name")
-
-                if forced_tool:
-                    tools_block = (
-                        f"INSTRUCCIÓN OBLIGATORIA E INAPELABLE: Tu única respuesta permitida es invocar "
-                        f"la herramienta \"{forced_tool}\" usando el formato exacto indicado abajo. "
-                        f"Está PROHIBIDO responder con texto. Está PROHIBIDO hacer preguntas. "
-                        f"Debes emitir el tool_call ahora mismo.\n\n"
-                        f"Formato obligatorio:\n"
-                        f"<tool_call>{{\"name\": \"{forced_tool}\", \"input\": {{<parametros>}}}}</tool_call>\n\n"
-                        f"Herramientas disponibles:\n" + tools_txt
-                    )
-                else:
-                    tools_block = (
-                        "Tienes acceso a las siguientes herramientas. "
-                        "Cuando necesites usar una, emite EXACTAMENTE este formato y nada más:\n"
-                        "<tool_call>{\"name\": \"<nombre>\", \"input\": {<parametros>}}</tool_call>\n\n"
-                        "Herramientas disponibles:\n" + tools_txt
-                    )
+                tools_block = (
+                    "Tienes acceso a las siguientes herramientas. "
+                    "Cuando necesites usar una, emite EXACTAMENTE este formato y nada más:\n"
+                    "<tool_call>{\"name\": \"<nombre>\", \"input\": {<parametros>}}</tool_call>\n\n"
+                    "Herramientas disponibles:\n" + tools_txt
+                )
                 if isinstance(system_con_tools, str) and system_con_tools.strip():
                     system_con_tools = system_con_tools + "\n\n" + tools_block
                 elif isinstance(system_con_tools, list):
