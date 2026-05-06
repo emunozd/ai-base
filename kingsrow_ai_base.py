@@ -45,6 +45,7 @@ from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from typing import Any, Generator, Optional
 
+import mlx.core as mx
 import uvicorn
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
@@ -469,7 +470,8 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
         enable_thinking=False,
     )
 
-    result    = vlm_generate(model, processor, prompt, max_tokens=128, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+    with mx.stream(mx.gpu):
+        result    = vlm_generate(model, processor, prompt, max_tokens=128, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
     respuesta = result.text.strip() if hasattr(result, "text") else str(result).strip()
     respuesta = re.sub(r"```json|```", "", respuesta).strip()
 
@@ -592,7 +594,8 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
         )
 
     prompt = _construir_prompt(mensajes, system="\n\n".join(partes))
-    result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+    with mx.stream(mx.gpu):
+        result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
     return result.text.strip() if hasattr(result, "text") else str(result).strip()
 
 
@@ -617,7 +620,8 @@ class MotorInferencia:
             num_images=0,
             enable_thinking=False,
         )
-        result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+        with mx.stream(mx.gpu):
+            result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
         return result.text.strip() if hasattr(result, "text") else str(result).strip()
 
     @staticmethod
@@ -638,7 +642,8 @@ class MotorInferencia:
                 num_images=1,
                 enable_thinking=False,
             )
-            result = vlm_generate(model, processor, prompt, image=tmp_path, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+            with mx.stream(mx.gpu):
+                result = vlm_generate(model, processor, prompt, image=tmp_path, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
             return result.text.strip() if hasattr(result, "text") else str(result).strip()
         finally:
             if os.path.exists(tmp_path):
