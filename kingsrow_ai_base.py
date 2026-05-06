@@ -45,9 +45,7 @@ from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from typing import Any, Generator, Optional
 
-import mlx.core as mx
 import uvicorn
-from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from mlx_vlm import generate as vlm_generate
@@ -67,58 +65,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # TurboQuant requiere thread-local stream GPU en el mismo thread de inferencia.
 # FastAPI usa un threadpool donde los threads no tienen el stream inicializado.
 # Solución: executor de 1 thread dedicado con stream GPU propio.
-def _init_mlx_thread():
-    mx.new_thread_local_stream(mx.gpu)  # stream 0
-    mx.new_thread_local_stream(mx.gpu)  # stream 1 — requerido por TurboQuant
-
-_GPU_EXECUTOR = ThreadPoolExecutor(max_workers=1, initializer=_init_mlx_thread)
-
-def _inferir_en_gpu(fn, *args, **kwargs):
-    """Ejecuta fn en el thread GPU dedicado con stream inicializado."""
-    return _GPU_EXECUTOR.submit(fn, *args, **kwargs).result()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Config
-# ─────────────────────────────────────────────────────────────────────────────
-from pydantic_settings import BaseSettings
-
-class _Settings(BaseSettings):
-    kr_model_path:             str = "mlx-community/Qwen3.5-35B-A3B-4bit"
-    kr_host:                   str = "0.0.0.0"
-    kr_port:                   int = 8181
-    kr_img_max:                int = 1024
-    kr_api_key:                str = ""
-    kr_max_tokens_chat:        int = 8192
-    kr_max_tokens_openai:      int = 4096
-    kr_max_tokens_luka:        int = 600
-    kr_max_ctx_tokens:         int = 20000
-    kr_ctx_cola_msgs:          int = 6
-    kr_web_search_max_results: int = 5
-    kr_web_fetch_max_chars:    int = 3000
-
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
-
-_cfg = _Settings()
-
-MODEL_PATH             = _cfg.kr_model_path
-HOST                   = _cfg.kr_host
-PORT                   = _cfg.kr_port
-IMG_MAX_PX             = _cfg.kr_img_max
-API_KEY                = _cfg.kr_api_key
-MAX_TOKENS_CHAT        = _cfg.kr_max_tokens_chat
-MAX_TOKENS_OPENAI      = _cfg.kr_max_tokens_openai
-MAX_TOKENS_LUKA        = _cfg.kr_max_tokens_luka
-MAX_CTX_TOKENS         = _cfg.kr_max_ctx_tokens
-CTX_COLA_MSGS          = _cfg.kr_ctx_cola_msgs
-WEB_SEARCH_MAX_RESULTS = _cfg.kr_web_search_max_results
-WEB_FETCH_MAX_CHARS    = _cfg.kr_web_fetch_max_chars
-
-# El clasificador solo necesita devolver JSON corto
-_MAX_TOKENS_CLASIFICADOR = 64
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Singleton del modelo
@@ -433,7 +379,7 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
         enable_thinking=False,
     )
 
-    result    = _inferir_en_gpu(vlm_generate, model, processor, prompt, max_tokens=128, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+    result    = vlm_generate(model, processor, prompt, max_tokens=128, verbose=False, kv_bits=8)
     respuesta = result.text.strip() if hasattr(result, "text") else str(result).strip()
     respuesta = re.sub(r"```json|```", "", respuesta).strip()
 
@@ -556,7 +502,7 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
         )
 
     prompt = _construir_prompt(mensajes, system="\n\n".join(partes))
-    result = _inferir_en_gpu(vlm_generate, model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+    result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=8)
     return result.text.strip() if hasattr(result, "text") else str(result).strip()
 
 
@@ -581,7 +527,7 @@ class MotorInferencia:
             num_images=0,
             enable_thinking=False,
         )
-        result = _inferir_en_gpu(vlm_generate, model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+        result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=8)
         return result.text.strip() if hasattr(result, "text") else str(result).strip()
 
     @staticmethod
@@ -602,7 +548,7 @@ class MotorInferencia:
                 num_images=1,
                 enable_thinking=False,
             )
-            result = _inferir_en_gpu(vlm_generate, model, processor, prompt, image=tmp_path, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+            result = vlm_generate(model, processor, prompt, image=tmp_path, max_tokens=max_tokens, verbose=False, kv_bits=8)
             return result.text.strip() if hasattr(result, "text") else str(result).strip()
         finally:
             if os.path.exists(tmp_path):
