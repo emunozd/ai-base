@@ -56,6 +56,8 @@ from mlx_vlm.utils import load_config
 from PIL import Image
 from pydantic import BaseModel
 
+mx.set_default_device(mx.gpu)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 # Silenciar librerías de búsqueda web — su verbosidad no aporta al log de producción
@@ -470,8 +472,7 @@ def _clasificar_busqueda(pregunta: str) -> list[str]:
         enable_thinking=False,
     )
 
-    with mx.stream(mx.gpu):
-        result    = vlm_generate(model, processor, prompt, max_tokens=128, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+    result    = vlm_generate(model, processor, prompt, max_tokens=128, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
     respuesta = result.text.strip() if hasattr(result, "text") else str(result).strip()
     respuesta = re.sub(r"```json|```", "", respuesta).strip()
 
@@ -594,8 +595,7 @@ def _inferir_chat(mensajes: list[dict], system: Any = None, max_tokens: int = MA
         )
 
     prompt = _construir_prompt(mensajes, system="\n\n".join(partes))
-    with mx.stream(mx.gpu):
-        result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+    result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
     return result.text.strip() if hasattr(result, "text") else str(result).strip()
 
 
@@ -620,8 +620,7 @@ class MotorInferencia:
             num_images=0,
             enable_thinking=False,
         )
-        with mx.stream(mx.gpu):
-            result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+        result = vlm_generate(model, processor, prompt, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
         return result.text.strip() if hasattr(result, "text") else str(result).strip()
 
     @staticmethod
@@ -642,8 +641,7 @@ class MotorInferencia:
                 num_images=1,
                 enable_thinking=False,
             )
-            with mx.stream(mx.gpu):
-                result = vlm_generate(model, processor, prompt, image=tmp_path, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
+            result = vlm_generate(model, processor, prompt, image=tmp_path, max_tokens=max_tokens, verbose=False, kv_bits=3.5, kv_quant_scheme="turboquant")
             return result.text.strip() if hasattr(result, "text") else str(result).strip()
         finally:
             if os.path.exists(tmp_path):
