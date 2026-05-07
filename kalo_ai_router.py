@@ -111,18 +111,29 @@ Reglas:
 - Nunca pongas 0 kcal a menos que sea agua pura.
 - TU RESPUESTA DEBE EMPEZAR CON { SIN NINGÚN TEXTO PREVIO."""
 
-PROMPT_SUGERENCIA = """Balance calórico del usuario hoy:
+PROMPT_SUGERENCIA = """Eres un nutricionista experto. Analiza el balance calórico y la composición nutricional del día del usuario.
+
+Balance calórico de hoy:
 - Objetivo: {objetivo} kcal
 - Consumidas: {consumidas} kcal
-- Quemadas ejercicio: {quemadas} kcal
+- Quemadas (ejercicio): {quemadas} kcal
 - Disponibles: {disponibles} kcal
-- Hora: {hora}
-- Registros: {comidas}
+- Hora actual: {hora}
+
+Alimentos registrados hoy:
+{comidas}
+
+Analiza:
+1. Si hay déficit o exceso calórico
+2. Si la composición es equilibrada (proteína, carbohidratos, grasas) o está sesgada
+3. Si predominan carbohidratos simples (pan blanco, azúcar, dulces) sin proteína suficiente — esto dificulta la pérdida de peso aunque se controlen las calorías
+4. Qué le falta o le sobra al plan del día
+
 Devuelve ÚNICAMENTE este JSON:
 {{
-  "mensaje": "sugerencia práctica y motivadora en 2-3 oraciones",
-  "opciones": ["opción comida 1", "opción comida 2", "opción comida 3"],
-  "advertencia": "advertencia si hay desbalance grave, o null"
+  "mensaje": "consejo nutricional práctico en 2-3 oraciones, menciona la composición si hay desbalance evidente",
+  "opciones": ["sugerencia alimento 1 rico en lo que le falta", "sugerencia alimento 2", "sugerencia alimento 3"],
+  "advertencia": "si predominan carbohidratos simples sin proteína, o hay otro desbalance grave — de lo contrario null"
 }}"""
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -337,19 +348,18 @@ class KaloRouter(BaseRouter):
         @self.router.post("/sugerencia-nutricional")
         def sugerencia_nutricional(req: SugerenciaRequest):
             try:
-                data = self.motor.extraer_json(
-                    self.motor.texto(
-                        PROMPT_SUGERENCIA.format(
-                            objetivo=req.objetivo,
-                            consumidas=req.consumidas,
-                            quemadas=req.quemadas,
-                            disponibles=req.disponibles,
-                            hora=req.hora,
-                            comidas=req.comidas,
-                        ),
-                        max_tokens=400,
-                    )
+                raw = self.motor.texto(
+                    PROMPT_SUGERENCIA.format(
+                        objetivo=req.objetivo,
+                        consumidas=req.consumidas,
+                        quemadas=req.quemadas,
+                        disponibles=req.disponibles,
+                        hora=req.hora,
+                        comidas=req.comidas,
+                    ),
+                    max_tokens=500,
                 )
+                data = _extraer_json_robusto(raw)
                 return _v_sugerencia(data)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
