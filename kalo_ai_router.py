@@ -126,14 +126,21 @@ Alimentos registrados hoy:
 Analiza:
 1. Si hay déficit o exceso calórico
 2. Si la composición es equilibrada (proteína, carbohidratos, grasas) o está sesgada
-3. Si predominan carbohidratos simples (pan blanco, azúcar, dulces) sin proteína suficiente — esto dificulta la pérdida de peso aunque se controlen las calorías
+3. Si predominan carbohidratos simples (pan blanco, azúcar, dulces, churros, pasteles, arequipe) sin proteína suficiente
 4. Qué le falta o le sobra al plan del día
+
+Reglas para el campo "advertencia" — úsalo cuando se cumpla CUALQUIERA de estas condiciones:
+- Hay POCA proteína registrada (pollo, huevo, carne, pescado, legumbres, lácteos, proteína en polvo)
+- Predominan dulces, harinas o carbohidratos simples (pan, churros, pasteles, galletas, azúcar, arequipe, mermelada, entre otros)
+- Un único alimento tiene más del 50% de calorías de azúcar o grasa saturada
+
+Si NO se cumple ninguna condición, pon null en advertencia.
 
 Devuelve ÚNICAMENTE este JSON:
 {{
   "mensaje": "consejo nutricional práctico en 2-3 oraciones, menciona la composición si hay desbalance evidente",
   "opciones": ["sugerencia alimento 1 rico en lo que le falta", "sugerencia alimento 2", "sugerencia alimento 3"],
-  "advertencia": "si predominan carbohidratos simples sin proteína, o hay otro desbalance grave — de lo contrario null"
+  "advertencia": "descripción clara del desbalance detectado, o null"
 }}"""
 
 # ─────────────────────────────────────────────────────────────────────────────
