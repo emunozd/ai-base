@@ -123,24 +123,24 @@ Balance calórico de hoy:
 Alimentos registrados hoy:
 {comidas}
 
-Analiza:
-1. Si hay déficit o exceso calórico
-2. Si la composición es equilibrada (proteína, carbohidratos, grasas) o está sesgada
-3. Si predominan carbohidratos simples (pan blanco, azúcar, dulces, churros, pasteles, arequipe) sin proteína suficiente
-4. Qué le falta o le sobra al plan del día
+Analiza el día EN CONJUNTO, no alimento por alimento:
+1. ¿Hay fuentes de proteína en el día? (pollo, carne, huevo, pescado, yogur, proteína en polvo, legumbres)
+2. ¿Hay verduras o fibra?
+3. ¿Predominan los azúcares simples o ultraprocesados en el total del día?
+4. ¿El balance calórico es adecuado para el objetivo?
 
-Reglas para el campo "advertencia" — úsalo cuando se cumpla CUALQUIERA de estas condiciones:
-- Hay POCA proteína registrada (pollo, huevo, carne, pescado, legumbres, lácteos, proteína en polvo)
-- Predominan dulces, harinas o carbohidratos simples (pan, churros, pasteles, galletas, azúcar, arequipe, mermelada, entre otros)
-- Un único alimento tiene más del 50% de calorías de azúcar o grasa saturada
+Reglas para "advertencia" — úsala SOLO si hay un desbalance CLARO en el día completo:
+- Sin NINGUNA fuente de proteína en todo el día
+- El día consiste principalmente en dulces, pasteles, snacks ultraprocesados o bebidas azucaradas
+- Se superó el objetivo calórico significativamente (más del 110%)
 
-Si NO se cumple ninguna condición, pon null en advertencia.
+Si el día tiene proteína (pollo, carne, yogur, huevo) aunque haya pan o carbohidratos, aunque no sea perfecto, pon null en advertencia.
 
 Devuelve ÚNICAMENTE este JSON:
 {{
-  "mensaje": "consejo nutricional práctico en 2-3 oraciones, menciona la composición si hay desbalance evidente",
-  "opciones": ["sugerencia alimento 1 rico en lo que le falta", "sugerencia alimento 2", "sugerencia alimento 3"],
-  "advertencia": "descripción clara del desbalance detectado, o null"
+  "mensaje": "evaluación honesta del día en 2-3 oraciones, reconoce lo bueno y sugiere mejoras concretas si aplica",
+  "opciones": ["alimento sugerido 1", "alimento sugerido 2", "alimento sugerido 3"],
+  "advertencia": "desbalance grave específico si aplica, o null"
 }}"""
 
 # ─────────────────────────────────────────────────────────────────────────────
