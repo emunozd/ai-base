@@ -124,8 +124,8 @@ Alimentos registrados hoy:
 {comidas}
 
 Analiza el día EN CONJUNTO, no alimento por alimento:
-1. ¿Hay fuentes de proteína en el día? (pollo, carne, huevo, pescado, yogur, proteína en polvo, legumbres)
-2. ¿Hay verduras o fibra?
+1. ¿Hay fuentes de proteína en el día? (pollo, carne, huevo, pescado, yogur, proteína en polvo, legumbres, o alguna conocida registrada por el usuario)
+2. ¿Hay verduras o fibra? (brócoli, coliflor, lentejas, linaza, chía, avena, frutas con cáscara, o alguna conocida registrada por el usuario)
 3. ¿Predominan los azúcares simples o ultraprocesados en el total del día?
 4. ¿El balance calórico es adecuado para el objetivo?
 
